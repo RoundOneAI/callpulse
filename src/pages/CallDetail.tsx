@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, User, Clock, MessageSquare } from 'lucide-react';
-import { getCall, getCoachingItems } from '../services/calls';
+import { ArrowLeft, Calendar, User, Clock, MessageSquare, Headphones } from 'lucide-react';
+import { getCall, getCoachingItems, getAudioUrl } from '../services/calls';
 import { cn } from '../utils/cn';
 import { getScoreColor, getScoreBg } from '../utils/scores';
 import ScoreCard from '../components/ScoreCard';
+import AudioPlayer from '../components/AudioPlayer';
 import { DIMENSIONS } from '../types';
 import type { Call, CallAnalysis, CoachingItem } from '../types';
 
@@ -12,6 +13,7 @@ export default function CallDetail() {
   const { id } = useParams<{ id: string }>();
   const [call, setCall] = useState<(Call & { analysis: CallAnalysis | null }) | null>(null);
   const [coaching, setCoaching] = useState<CoachingItem[]>([]);
+  const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -21,6 +23,11 @@ export default function CallDetail() {
       if (callData.company_id && callData.analysis?.id) {
         const items = await getCoachingItems({ companyId: callData.company_id });
         setCoaching(items.filter(i => i.call_analysis_id === callData.analysis?.id));
+      }
+      // Fetch signed audio URL if file exists
+      if (callData.file_path) {
+        const url = await getAudioUrl(callData.file_path);
+        if (url) setAudioSrc(url);
       }
       setLoading(false);
     }).catch((err) => {
@@ -81,6 +88,17 @@ export default function CallDetail() {
           </div>
         )}
       </div>
+
+      {/* Audio Player */}
+      {audioSrc && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <h2 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Headphones className="h-5 w-5 text-gray-400" />
+            Call Recording
+          </h2>
+          <AudioPlayer src={audioSrc} />
+        </div>
+      )}
 
       {analysis && (
         <>

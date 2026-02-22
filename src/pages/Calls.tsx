@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Phone, Search, Filter } from 'lucide-react';
+import { Phone, Search } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
-import { getCalls } from '../services/calls';
+import { getCalls, getAudioUrl } from '../services/calls';
 import { supabase } from '../services/supabase';
 import { cn } from '../utils/cn';
 import { getScoreBadge } from '../utils/scores';
+import AudioPlayer from '../components/AudioPlayer';
 import type { Call, Profile } from '../types';
 
 export default function Calls() {
@@ -16,16 +17,30 @@ export default function Calls() {
   const [filterSdr, setFilterSdr] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
+  const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!company) return;
     Promise.all([
       getCalls(company.id),
       supabase.from('profiles').select('*').eq('company_id', company.id).eq('role', 'sdr'),
-    ]).then(([callsData, { data: sdrsData }]) => {
+    ]).then(async ([callsData, { data: sdrsData }]) => {
       setCalls(callsData);
       setSdrs(sdrsData || []);
       setLoading(false);
+
+      // Fetch signed URLs for calls with audio files
+      const withAudio = callsData.filter(c => c.file_path);
+      if (withAudio.length > 0) {
+        const urls: Record<string, string> = {};
+        await Promise.all(
+          withAudio.map(async (c) => {
+            const url = await getAudioUrl(c.file_path!);
+            if (url) urls[c.id] = url;
+          })
+        );
+        setAudioUrls(urls);
+      }
     });
   }, [company]);
 
@@ -95,6 +110,7 @@ export default function Calls() {
               <th className="text-left py-3 px-4 font-medium text-gray-500">SDR</th>
               <th className="text-left py-3 px-4 font-medium text-gray-500">Prospect</th>
               <th className="text-left py-3 px-4 font-medium text-gray-500">Date</th>
+              <th className="text-left py-3 px-4 font-medium text-gray-500">Recording</th>
               <th className="text-left py-3 px-4 font-medium text-gray-500">Score</th>
               <th className="text-left py-3 px-4 font-medium text-gray-500">Status</th>
               <th className="text-left py-3 px-4 font-medium text-gray-500"></th>
@@ -110,6 +126,13 @@ export default function Calls() {
                   </td>
                   <td className="py-3 px-4 text-gray-600">{call.prospect_name || '—'}</td>
                   <td className="py-3 px-4 text-gray-600">{call.call_date}</td>
+                  <td className="py-3 px-4 min-w-[180px]">
+                    {audioUrls[call.id] ? (
+                      <AudioPlayer src={audioUrls[call.id]} compact />
+                    ) : (
+                      <span className="text-xs text-gray-300">--</span>
+                    )}
+                  </td>
                   <td className="py-3 px-4">
                     {analysis ? (
                       <span className={cn(

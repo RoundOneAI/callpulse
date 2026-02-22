@@ -24,6 +24,7 @@ export interface Call {
   sdr_id: string;
   uploaded_by: string;
   file_url: string | null;
+  file_path: string | null;
   transcript: string | null;
   call_date: string;
   week_number: number;

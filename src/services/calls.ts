@@ -54,17 +54,14 @@ export async function uploadAudioCall(params: {
 
   if (uploadError) throw uploadError;
 
-  const { data: { publicUrl } } = supabase.storage
-    .from('call-recordings')
-    .getPublicUrl(filePath);
-
   const { data, error } = await supabase
     .from('calls')
     .insert({
       sdr_id: params.sdrId,
       company_id: params.companyId,
       uploaded_by: params.uploadedBy,
-      file_url: publicUrl,
+      file_url: filePath,
+      file_path: filePath,
       call_date: params.callDate,
       week_number: weekNumber,
       year: year,
@@ -76,6 +73,18 @@ export async function uploadAudioCall(params: {
 
   if (error) throw error;
   return { ...data, filePath };
+}
+
+export async function getAudioUrl(filePath: string): Promise<string | null> {
+  const { data, error } = await supabase.storage
+    .from('call-recordings')
+    .createSignedUrl(filePath, 3600); // 1 hour expiry
+
+  if (error) {
+    console.error('Failed to get signed URL:', error);
+    return null;
+  }
+  return data.signedUrl;
 }
 
 export async function markCallFailed(callId: string): Promise<void> {

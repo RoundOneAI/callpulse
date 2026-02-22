@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Users, UserPlus, Mail, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Users, UserPlus, TrendingUp, TrendingDown, Minus, Loader2 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { supabase } from '../services/supabase';
 import { getWeeklyReports } from '../services/reports';
@@ -9,13 +9,18 @@ import { cn } from '../utils/cn';
 import { getScoreColor } from '../utils/scores';
 import type { Profile, WeeklyReport } from '../types';
 
+type AddMode = 'quick' | 'invite';
+
 export default function Team() {
   const { user, company } = useAuthStore();
   const [sdrs, setSdrs] = useState<Profile[]>([]);
   const [reports, setReports] = useState<WeeklyReport[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showInvite, setShowInvite] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ email: '', fullName: '', role: 'sdr' });
+  const [showAdd, setShowAdd] = useState(false);
+  const [addMode, setAddMode] = useState<AddMode>('quick');
+  const [form, setForm] = useState({ email: '', fullName: '', role: 'sdr' });
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
 
   const { week, year } = getCurrentWeek();
   const canManage = user?.role === 'admin' || user?.role === 'manager';
@@ -32,28 +37,85 @@ export default function Team() {
     });
   }, [company]);
 
-  async function inviteUser() {
+  async function refreshTeam() {
     if (!company) return;
+    const { data } = await supabase.from('profiles').select('*').eq('company_id', company.id).order('full_name');
+    setSdrs(data || []);
+  }
+
+  async function quickAdd() {
+    if (!company || !form.fullName.trim()) {
+      setFormError('Name is required');
+      return;
+    }
+
+    setSubmitting(true);
+    setFormError('');
+
     try {
-      // In production, you'd send an invite email via Supabase
-      // For now, we create the user directly
-      const { error } = await supabase.auth.admin.createUser({
-        email: inviteForm.email,
-        user_metadata: {
-          full_name: inviteForm.fullName,
-          company_id: company.id,
-          role: inviteForm.role,
+      // Create a placeholder profile directly — no auth account needed.
+      // This SDR will appear in dropdowns for call assignment.
+      // They can be invited later to get their own login.
+      const { error } = await supabase.from('profiles').insert({
+        id: crypto.randomUUID(),
+        company_id: company.id,
+        full_name: form.fullName.trim(),
+        email: form.email.trim() || `${form.fullName.trim().toLowerCase().replace(/\s+/g, '.')}@placeholder.local`,
+        role: form.role as any,
+      });
+
+      if (error) throw error;
+
+      setShowAdd(false);
+      setForm({ email: '', fullName: '', role: 'sdr' });
+      await refreshTeam();
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to add member');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function inviteUser() {
+    if (!company || !form.email.trim() || !form.fullName.trim()) {
+      setFormError('Name and email are required for invites');
+      return;
+    }
+
+    setSubmitting(true);
+    setFormError('');
+
+    try {
+      const { data, error } = await supabase.functions.invoke('invite-user', {
+        body: {
+          email: form.email,
+          fullName: form.fullName,
+          role: form.role,
+          companyId: company.id,
         },
       });
+
       if (error) throw error;
-      setShowInvite(false);
-      setInviteForm({ email: '', fullName: '', role: 'sdr' });
-      // Refresh
-      const { data } = await supabase.from('profiles').select('*').eq('company_id', company.id);
-      setSdrs(data || []);
+      if (data?.error) throw new Error(data.error);
+
+      setShowAdd(false);
+      setForm({ email: '', fullName: '', role: 'sdr' });
+      await refreshTeam();
     } catch (err: any) {
-      alert(err.message || 'Failed to invite user');
+      setFormError(
+        err.message?.includes('401') || err.message?.includes('404') || err.message?.includes('Failed to fetch')
+          ? 'Edge Function not deployed yet. Use "Quick Add" instead, or deploy the invite-user function first.'
+          : err.message || 'Failed to invite user'
+      );
+    } finally {
+      setSubmitting(false);
     }
+  }
+
+  function closeForm() {
+    setShowAdd(false);
+    setFormError('');
+    setForm({ email: '', fullName: '', role: 'sdr' });
   }
 
   if (loading) {
@@ -70,7 +132,7 @@ export default function Team() {
         <h1 className="text-2xl font-bold text-gray-900">Team</h1>
         {canManage && (
           <button
-            onClick={() => setShowInvite(true)}
+            onClick={() => setShowAdd(true)}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
           >
             <UserPlus className="h-4 w-4" /> Add Member
@@ -78,40 +140,82 @@ export default function Team() {
         )}
       </div>
 
-      {/* Invite form */}
-      {showInvite && (
+      {/* Add member form */}
+      {showAdd && (
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-          <h2 className="font-semibold text-gray-900">Invite Team Member</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Mode toggle */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+            <button
+              onClick={() => { setAddMode('quick'); setFormError(''); }}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                addMode === 'quick' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              )}
+            >
+              Quick Add
+            </button>
+            <button
+              onClick={() => { setAddMode('invite'); setFormError(''); }}
+              className={cn(
+                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                addMode === 'invite' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              )}
+            >
+              Send Invite
+            </button>
+          </div>
+
+          <div>
+            <p className="text-sm text-gray-500">
+              {addMode === 'quick'
+                ? 'Add a team member for call tracking. You can invite them to log in later.'
+                : 'Send a magic link email so they can log in and see their own scores.'}
+            </p>
+          </div>
+
+          <div className={cn('grid gap-4', addMode === 'invite' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2')}>
             <input
               type="text"
-              value={inviteForm.fullName}
-              onChange={e => setInviteForm(f => ({ ...f, fullName: e.target.value }))}
+              value={form.fullName}
+              onChange={e => setForm(f => ({ ...f, fullName: e.target.value }))}
               placeholder="Full Name"
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
-            <input
-              type="email"
-              value={inviteForm.email}
-              onChange={e => setInviteForm(f => ({ ...f, email: e.target.value }))}
-              placeholder="Email"
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
+            {addMode === 'invite' && (
+              <input
+                type="email"
+                value={form.email}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                placeholder="Email"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            )}
             <select
-              value={inviteForm.role}
-              onChange={e => setInviteForm(f => ({ ...f, role: e.target.value }))}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={form.role}
+              onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="sdr">SDR</option>
               <option value="manager">Manager</option>
               <option value="admin">Admin</option>
             </select>
           </div>
+
+          {formError && <p className="text-sm text-red-600">{formError}</p>}
+
           <div className="flex gap-2">
-            <button onClick={inviteUser} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
-              Send Invite
+            <button
+              onClick={addMode === 'quick' ? quickAdd : inviteUser}
+              disabled={submitting}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {submitting ? 'Adding...' : addMode === 'quick' ? 'Add Member' : 'Send Invite'}
             </button>
-            <button onClick={() => setShowInvite(false)} className="px-4 py-2 text-gray-600 text-sm rounded-lg hover:bg-gray-100">
+            <button
+              onClick={closeForm}
+              className="px-4 py-2 text-gray-600 text-sm rounded-lg hover:bg-gray-100"
+            >
               Cancel
             </button>
           </div>
@@ -119,75 +223,82 @@ export default function Team() {
       )}
 
       {/* Team grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {sdrs.filter(s => s.role === 'sdr').map(sdr => {
-          const report = reports.find(r => r.sdr_id === sdr.id);
-          const avgScores = report?.avg_scores as Record<string, number> | undefined;
-          const comparison = report?.comparison_with_previous as Record<string, number> | undefined;
-          const overallScore = avgScores?.overall || 0;
-          const delta = comparison?.overall || 0;
+      {sdrs.filter(s => s.role === 'sdr').length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {sdrs.filter(s => s.role === 'sdr').map(sdr => {
+            const report = reports.find(r => r.sdr_id === sdr.id);
+            const avgScores = report?.avg_scores as Record<string, number> | undefined;
+            const comparison = report?.comparison_with_previous as Record<string, number> | undefined;
+            const overallScore = avgScores?.overall || 0;
+            const delta = comparison?.overall || 0;
 
-          return (
-            <Link
-              key={sdr.id}
-              to={`/team/${sdr.id}`}
-              className="bg-white border border-gray-200 rounded-xl p-5 hover:border-indigo-200 hover:shadow-sm transition-all"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center">
-                    <span className="text-sm font-bold text-indigo-700">
-                      {sdr.full_name.split(' ').map(n => n[0]).join('')}
-                    </span>
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-900">{sdr.full_name}</p>
-                    <p className="text-xs text-gray-500">{sdr.email}</p>
-                  </div>
-                </div>
-                {!sdr.is_active && (
-                  <span className="text-xs bg-gray-100 text-gray-500 rounded px-2 py-0.5">Inactive</span>
-                )}
-              </div>
-
-              {report ? (
-                <div className="mt-4 grid grid-cols-3 gap-3 text-center">
-                  <div>
-                    <p className={cn('text-xl font-bold', getScoreColor(overallScore))}>
-                      {overallScore.toFixed(1)}
-                    </p>
-                    <p className="text-xs text-gray-500">Avg Score</p>
-                  </div>
-                  <div>
-                    <p className="text-xl font-bold text-gray-900">{report.calls_analyzed}</p>
-                    <p className="text-xs text-gray-500">Calls</p>
-                  </div>
-                  <div className="flex flex-col items-center">
-                    <div className="flex items-center gap-1">
-                      {delta > 0.3 ? (
-                        <TrendingUp className="h-4 w-4 text-emerald-500" />
-                      ) : delta < -0.3 ? (
-                        <TrendingDown className="h-4 w-4 text-red-500" />
-                      ) : (
-                        <Minus className="h-4 w-4 text-gray-400" />
-                      )}
-                      <span className={cn(
-                        'text-sm font-medium',
-                        delta > 0.3 ? 'text-emerald-600' : delta < -0.3 ? 'text-red-600' : 'text-gray-500'
-                      )}>
-                        {delta > 0 ? '+' : ''}{delta.toFixed(1)}
+            return (
+              <Link
+                key={sdr.id}
+                to={`/team/${sdr.id}`}
+                className="bg-white border border-gray-200 rounded-xl p-5 hover:border-indigo-200 hover:shadow-sm transition-all"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center">
+                      <span className="text-sm font-bold text-indigo-700">
+                        {sdr.full_name.split(' ').map(n => n[0]).join('')}
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500">vs Last Wk</p>
+                    <div>
+                      <p className="font-medium text-gray-900">{sdr.full_name}</p>
+                      <p className="text-xs text-gray-500">{sdr.email}</p>
+                    </div>
                   </div>
+                  {!sdr.is_active && (
+                    <span className="text-xs bg-gray-100 text-gray-500 rounded px-2 py-0.5">Inactive</span>
+                  )}
                 </div>
-              ) : (
-                <p className="mt-4 text-sm text-gray-400 text-center">No data this week</p>
-              )}
-            </Link>
-          );
-        })}
-      </div>
+
+                {report ? (
+                  <div className="mt-4 grid grid-cols-3 gap-3 text-center">
+                    <div>
+                      <p className={cn('text-xl font-bold', getScoreColor(overallScore))}>
+                        {overallScore.toFixed(1)}
+                      </p>
+                      <p className="text-xs text-gray-500">Avg Score</p>
+                    </div>
+                    <div>
+                      <p className="text-xl font-bold text-gray-900">{report.calls_analyzed}</p>
+                      <p className="text-xs text-gray-500">Calls</p>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <div className="flex items-center gap-1">
+                        {delta > 0.3 ? (
+                          <TrendingUp className="h-4 w-4 text-emerald-500" />
+                        ) : delta < -0.3 ? (
+                          <TrendingDown className="h-4 w-4 text-red-500" />
+                        ) : (
+                          <Minus className="h-4 w-4 text-gray-400" />
+                        )}
+                        <span className={cn(
+                          'text-sm font-medium',
+                          delta > 0.3 ? 'text-emerald-600' : delta < -0.3 ? 'text-red-600' : 'text-gray-500'
+                        )}>
+                          {delta > 0 ? '+' : ''}{delta.toFixed(1)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500">vs Last Wk</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-gray-400 text-center">No data this week</p>
+                )}
+              </Link>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-8 text-center">
+          <Users className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+          <p className="text-sm text-gray-500">No SDRs yet. Add team members to start tracking call performance.</p>
+        </div>
+      )}
 
       {/* Managers/Admins section */}
       {sdrs.filter(s => s.role !== 'sdr').length > 0 && (

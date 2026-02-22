@@ -11,10 +11,7 @@ export async function generateWeeklyReport(params: {
   // Get all completed calls for this SDR this week
   const { data: calls, error: callsError } = await supabase
     .from('calls')
-    .select(`
-      id,
-      analysis:call_analyses(*)
-    `)
+    .select('id')
     .eq('company_id', params.companyId)
     .eq('sdr_id', params.sdrId)
     .eq('week_number', params.weekNumber)
@@ -23,9 +20,16 @@ export async function generateWeeklyReport(params: {
 
   if (callsError) throw callsError;
 
-  const analyses = (calls || [])
-    .map(c => (c.analysis as unknown as CallAnalysis[])?.[0])
-    .filter(Boolean) as CallAnalysis[];
+  const callIds = (calls || []).map(c => c.id);
+  let analyses: CallAnalysis[] = [];
+
+  if (callIds.length > 0) {
+    const { data: analysesData } = await supabase
+      .from('call_analyses')
+      .select('*')
+      .in('call_id', callIds);
+    analyses = (analysesData || []) as CallAnalysis[];
+  }
 
   if (analyses.length === 0) {
     throw new Error('No analyzed calls found for this week');

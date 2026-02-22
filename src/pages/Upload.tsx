@@ -10,8 +10,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
-import { uploadCall, saveAnalysis } from '../services/calls';
-import { analyzeTranscriptDirect } from '../services/analysis';
+import { uploadCall, uploadAudioCall, markCallFailed } from '../services/calls';
+import { analyzeCall, transcribeAudio } from '../services/analysis';
 import { supabase } from '../services/supabase';
 import type { Profile } from '../types';
 import { cn } from '../utils/cn';
@@ -23,7 +23,7 @@ interface UploadItem {
   sdrId: string;
   callDate: string;
   prospectName: string;
-  status: 'pending' | 'uploading' | 'analyzing' | 'done' | 'error';
+  status: 'pending' | 'uploading' | 'transcribing' | 'analyzing' | 'done' | 'error';
   error?: string;
   score?: number;
 }
@@ -35,10 +35,13 @@ export default function Upload() {
   const [pasteMode, setPasteMode] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [selectedSdr, setSelectedSdr] = useState('');
-  const [callDate, setCallDate] = useState(new Date().toISOString().split('T')[0]);
+  const [callDate, setCallDate] = useState(() => {
+    const now = new Date();
+    // Format as YYYY-MM-DDTHH:MM for datetime-local input
+    return now.toISOString().slice(0, 16);
+  });
   const [prospectName, setProspectName] = useState('');
   const [processing, setProcessing] = useState(false);
-  const [apiKey, setApiKey] = useState('');
 
   useEffect(() => {
     if (!company) return;
@@ -46,8 +49,8 @@ export default function Upload() {
       .from('profiles')
       .select('*')
       .eq('company_id', company.id)
-      .eq('role', 'sdr')
       .eq('is_active', true)
+      .order('full_name')
       .then(({ data }) => setSdrs(data || []));
   }, [company]);
 
@@ -111,53 +114,63 @@ export default function Upload() {
         updateItem(item.id, { status: 'uploading' });
 
         let transcript = item.transcript;
+        let callId: string;
 
         // If it's a text file, read its content
         if (item.file && item.file.type === 'text/plain') {
           transcript = await item.file.text();
         }
 
-        // If it's an audio file, we'd need transcription
+        // Audio file: upload → transcribe → analyze
         if (item.file && item.file.type.startsWith('audio/')) {
-          // For MVP, audio files need the Deepgram integration
-          // For now, mark as needing transcription
-          updateItem(item.id, {
-            status: 'error',
-            error: 'Audio transcription requires Deepgram API setup. Please upload a text transcript instead.',
+          const callData = await uploadAudioCall({
+            sdrId: item.sdrId,
+            companyId: company.id,
+            uploadedBy: user.id,
+            file: item.file,
+            callDate: item.callDate,
+            prospectName: item.prospectName || undefined,
           });
-          continue;
+          callId = callData.id;
+
+          // Transcribe
+          updateItem(item.id, { status: 'transcribing' });
+          try {
+            const result = await transcribeAudio({
+              callId: callData.id,
+              filePath: callData.filePath,
+            });
+            transcript = result.transcript;
+          } catch (err: any) {
+            await markCallFailed(callData.id);
+            throw new Error(`Transcription failed: ${err.message}`);
+          }
+        } else {
+          // Text transcript: upload call record directly
+          if (!transcript) {
+            updateItem(item.id, { status: 'error', error: 'No transcript content' });
+            continue;
+          }
+
+          const callData = await uploadCall({
+            sdrId: item.sdrId,
+            companyId: company.id,
+            uploadedBy: user.id,
+            transcript,
+            callDate: item.callDate,
+            prospectName: item.prospectName || undefined,
+          });
+          callId = callData.id;
         }
 
-        if (!transcript) {
-          updateItem(item.id, { status: 'error', error: 'No transcript content' });
-          continue;
-        }
-
-        // Upload call record
-        const call = await uploadCall({
+        // Analyze with Claude (via Edge Function)
+        updateItem(item.id, { status: 'analyzing' });
+        const analysis = await analyzeCall({
+          transcript,
+          callId,
           sdrId: item.sdrId,
           companyId: company.id,
-          uploadedBy: user.id,
-          transcript,
-          callDate: item.callDate,
-          prospectName: item.prospectName || undefined,
         });
-
-        // Analyze with Claude
-        updateItem(item.id, { status: 'analyzing' });
-
-        if (!apiKey) {
-          updateItem(item.id, {
-            status: 'error',
-            error: 'Enter your Claude API key above to enable analysis',
-          });
-          continue;
-        }
-
-        const analysis = await analyzeTranscriptDirect(transcript, apiKey);
-
-        // Save analysis
-        await saveAnalysis(call.id, analysis, item.sdrId, company.id);
 
         updateItem(item.id, {
           status: 'done',
@@ -183,23 +196,6 @@ export default function Upload() {
         </p>
       </div>
 
-      {/* API Key input */}
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-        <label className="block text-sm font-medium text-amber-800 mb-1">
-          Claude API Key (required for analysis)
-        </label>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          placeholder="sk-ant-..."
-          className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-        <p className="text-xs text-amber-600 mt-1">
-          Your API key is used directly from the browser and never stored.
-        </p>
-      </div>
-
       {/* Defaults */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
@@ -216,9 +212,9 @@ export default function Upload() {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Call Date</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Call Date & Time</label>
           <input
-            type="date"
+            type="datetime-local"
             value={callDate}
             onChange={e => setCallDate(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -253,7 +249,7 @@ export default function Upload() {
             Drop files here, or click to browse
           </p>
           <p className="text-xs text-gray-500 mt-1">
-            .txt transcripts or .mp3/.wav audio files
+            .txt transcripts or .mp3/.wav/.m4a audio files
           </p>
         </div>
 
@@ -342,6 +338,11 @@ export default function Upload() {
                 <p className="text-sm font-medium text-gray-900 truncate">
                   {item.file?.name || 'Pasted transcript'}
                 </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {item.status === 'uploading' && 'Uploading...'}
+                  {item.status === 'transcribing' && 'Transcribing audio...'}
+                  {item.status === 'analyzing' && 'Analyzing with AI...'}
+                </p>
                 {item.error && (
                   <p className="text-xs text-red-600 mt-0.5">{item.error}</p>
                 )}
@@ -364,7 +365,7 @@ export default function Upload() {
                   <X className="h-4 w-4" />
                 </button>
               )}
-              {(item.status === 'uploading' || item.status === 'analyzing') && (
+              {(item.status === 'uploading' || item.status === 'transcribing' || item.status === 'analyzing') && (
                 <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
               )}
               {item.status === 'done' && (

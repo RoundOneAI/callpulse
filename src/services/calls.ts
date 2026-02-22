@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { Call, CallAnalysis, CoachingItem, AnalysisResult } from '../types';
+import type { Call, CallAnalysis, CoachingItem } from '../types';
 import { getWeekNumber } from '../utils/dates';
 
 export async function uploadCall(params: {
@@ -41,7 +41,7 @@ export async function uploadAudioCall(params: {
   file: File;
   callDate: string;
   prospectName?: string;
-}): Promise<Call> {
+}): Promise<Call & { filePath: string }> {
   const date = new Date(params.callDate);
   const weekNumber = getWeekNumber(date);
   const year = date.getFullYear();
@@ -75,75 +75,13 @@ export async function uploadAudioCall(params: {
     .single();
 
   if (error) throw error;
-  return data;
+  return { ...data, filePath };
 }
 
-export async function saveAnalysis(
-  callId: string,
-  analysis: AnalysisResult,
-  sdrId: string,
-  companyId: string
-): Promise<void> {
-  const { error: analysisError } = await supabase
-    .from('call_analyses')
-    .insert({
-      call_id: callId,
-      overall_score: analysis.overall_score,
-      opening_score: analysis.dimensions.opening.score,
-      opening_justification: analysis.dimensions.opening.justification,
-      opening_quotes: analysis.dimensions.opening.quotes,
-      discovery_score: analysis.dimensions.discovery.score,
-      discovery_justification: analysis.dimensions.discovery.justification,
-      discovery_quotes: analysis.dimensions.discovery.quotes,
-      value_prop_score: analysis.dimensions.value_prop.score,
-      value_prop_justification: analysis.dimensions.value_prop.justification,
-      value_prop_quotes: analysis.dimensions.value_prop.quotes,
-      objection_score: analysis.dimensions.objection.score,
-      objection_justification: analysis.dimensions.objection.justification,
-      objection_quotes: analysis.dimensions.objection.quotes,
-      closing_score: analysis.dimensions.closing.score,
-      closing_justification: analysis.dimensions.closing.justification,
-      closing_quotes: analysis.dimensions.closing.quotes,
-      tone_score: analysis.dimensions.tone.score,
-      tone_justification: analysis.dimensions.tone.justification,
-      tone_quotes: analysis.dimensions.tone.quotes,
-      strengths: analysis.strengths,
-      weaknesses: analysis.weaknesses,
-      summary: analysis.summary,
-    });
-
-  if (analysisError) throw analysisError;
-
-  // Create coaching items from each dimension's suggestion
-  const coachingItems = Object.entries(analysis.dimensions).map(([dimension, dim]) => ({
-    call_analysis_id: '', // will be filled after we get the analysis id
-    sdr_id: sdrId,
-    company_id: companyId,
-    dimension,
-    action_item: dim.coaching_suggestion,
-    status: 'open' as const,
-  }));
-
-  // Get the analysis ID
-  const { data: savedAnalysis } = await supabase
-    .from('call_analyses')
-    .select('id')
-    .eq('call_id', callId)
-    .single();
-
-  if (savedAnalysis) {
-    const itemsWithId = coachingItems.map(item => ({
-      ...item,
-      call_analysis_id: savedAnalysis.id,
-    }));
-
-    await supabase.from('coaching_items').insert(itemsWithId);
-  }
-
-  // Update call status
+export async function markCallFailed(callId: string): Promise<void> {
   await supabase
     .from('calls')
-    .update({ status: 'completed' })
+    .update({ status: 'failed' })
     .eq('id', callId);
 }
 
@@ -157,8 +95,7 @@ export async function getCalls(companyId: string, filters?: {
     .from('calls')
     .select(`
       *,
-      sdr:profiles!calls_sdr_id_fkey(id, full_name, email),
-      analysis:call_analyses(*)
+      sdr:profiles!calls_sdr_id_fkey(id, full_name, email)
     `)
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
@@ -170,24 +107,47 @@ export async function getCalls(companyId: string, filters?: {
 
   const { data, error } = await query;
   if (error) throw error;
-  return data || [];
+
+  // Fetch analyses separately to avoid RLS issues with joined queries
+  const callIds = (data || []).map(c => c.id);
+  let analyses: CallAnalysis[] = [];
+  if (callIds.length > 0) {
+    const { data: analysesData } = await supabase
+      .from('call_analyses')
+      .select('*')
+      .in('call_id', callIds);
+    analyses = analysesData || [];
+  }
+
+  return (data || []).map(call => ({
+    ...call,
+    analysis: analyses.find(a => a.call_id === call.id) || null,
+  }));
 }
 
 export async function getCall(callId: string): Promise<Call & { analysis: CallAnalysis | null }> {
-  const { data, error } = await supabase
+  // Fetch call with SDR profile
+  const { data: callData, error: callError } = await supabase
     .from('calls')
     .select(`
       *,
-      sdr:profiles!calls_sdr_id_fkey(id, full_name, email),
-      analysis:call_analyses(*)
+      sdr:profiles!calls_sdr_id_fkey(id, full_name, email)
     `)
     .eq('id', callId)
     .single();
 
-  if (error) throw error;
+  if (callError) throw callError;
+
+  // Fetch analysis separately (avoids RLS issues with joined queries)
+  const { data: analysisData } = await supabase
+    .from('call_analyses')
+    .select('*')
+    .eq('call_id', callId)
+    .maybeSingle();
+
   return {
-    ...data,
-    analysis: data.analysis?.[0] || null,
+    ...callData,
+    analysis: analysisData || null,
   };
 }
 

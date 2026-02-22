@@ -16,12 +16,15 @@ export default function CallDetail() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([
-      getCall(id),
-      getCoachingItems({ companyId: '' }).catch(() => []), // will filter client-side
-    ]).then(([callData, items]) => {
+    getCall(id).then(async (callData) => {
       setCall(callData);
-      setCoaching(items.filter(i => i.call_analysis_id === callData.analysis?.id));
+      if (callData.company_id && callData.analysis?.id) {
+        const items = await getCoachingItems({ companyId: callData.company_id });
+        setCoaching(items.filter(i => i.call_analysis_id === callData.analysis?.id));
+      }
+      setLoading(false);
+    }).catch((err) => {
+      console.error('CallDetail error:', err);
       setLoading(false);
     });
   }, [id]);

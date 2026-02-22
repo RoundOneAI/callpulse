@@ -92,15 +92,15 @@ export default function Settings() {
           </div>
           <div className="flex gap-3">
             <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">3</span>
-            <p>Create your first company and admin account via the sign-up page</p>
+            <p>Deploy Edge Functions and set secrets: <code className="bg-indigo-100 px-1 rounded">ANTHROPIC_API_KEY</code>, <code className="bg-indigo-100 px-1 rounded">DEEPGRAM_API_KEY</code></p>
           </div>
           <div className="flex gap-3">
             <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">4</span>
-            <p>Add your SDRs via the Team page</p>
+            <p>Invite your first admin user, then invite SDRs and managers from the Team page</p>
           </div>
           <div className="flex gap-3">
             <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">5</span>
-            <p>Upload call transcripts and enter your Claude API key on the Upload page</p>
+            <p>Upload call transcripts or audio recordings on the Upload page</p>
           </div>
           <div className="flex gap-3">
             <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">6</span>

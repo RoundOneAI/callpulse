@@ -7,17 +7,29 @@ interface AuthState {
   company: Company | null;
   loading: boolean;
   initialized: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (params: {
-    email: string;
-    password: string;
-    fullName: string;
-    companyName?: string;
-    companyId?: string;
-    role?: string;
-  }) => Promise<void>;
+  needsOnboarding: boolean;
+  signInWithMagicLink: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   initialize: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
+}
+
+async function loadProfile(userId: string) {
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
+
+  if (!profile) return { profile: null, company: null };
+
+  const { data: company } = await supabase
+    .from('companies')
+    .select('*')
+    .eq('id', profile.company_id)
+    .single();
+
+  return { profile, company };
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -25,100 +37,76 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   company: null,
   loading: false,
   initialized: false,
+  needsOnboarding: false,
 
   initialize: async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
-
+        const { profile, company } = await loadProfile(session.user.id);
         if (profile) {
-          const { data: company } = await supabase
-            .from('companies')
-            .select('*')
-            .eq('id', profile.company_id)
-            .single();
-
-          set({ user: profile, company, initialized: true });
-          return;
+          set({ user: profile, company, initialized: true, needsOnboarding: false });
+        } else {
+          // Authenticated but no profile — needs onboarding
+          set({ initialized: true, needsOnboarding: true });
         }
+        // Set up listener after initial load
+        setupAuthListener(set);
+        return;
       }
     } catch (err) {
       console.error('Auth init error:', err);
     }
     set({ initialized: true });
+    setupAuthListener(set);
   },
 
-  signIn: async (email, password) => {
-    set({ loading: true });
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', data.user.id)
-        .single();
-
-      const { data: company } = await supabase
-        .from('companies')
-        .select('*')
-        .eq('id', profile?.company_id)
-        .single();
-
-      set({ user: profile, company, loading: false });
-    } catch (err) {
-      set({ loading: false });
-      throw err;
+  refreshProfile: async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) return;
+    const { profile, company } = await loadProfile(session.user.id);
+    if (profile) {
+      set({ user: profile, company, needsOnboarding: false });
     }
   },
 
-  signUp: async ({ email, password, fullName, companyName, companyId, role }) => {
+  signInWithMagicLink: async (email) => {
     set({ loading: true });
     try {
-      let targetCompanyId = companyId;
-
-      // If creating a new company
-      if (!targetCompanyId && companyName) {
-        const { data: newCompany, error: companyError } = await supabase
-          .from('companies')
-          .insert({ name: companyName })
-          .select()
-          .single();
-        if (companyError) throw companyError;
-        targetCompanyId = newCompany.id;
-      }
-
-      if (!targetCompanyId) throw new Error('Company ID required');
-
-      const { data, error } = await supabase.auth.signUp({
+      const { error } = await supabase.auth.signInWithOtp({
         email,
-        password,
         options: {
-          data: {
-            full_name: fullName,
-            company_id: targetCompanyId,
-            role: role || 'admin',
-          },
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
         },
       });
-
       if (error) throw error;
-
+    } finally {
       set({ loading: false });
-    } catch (err) {
-      set({ loading: false });
-      throw err;
     }
   },
 
   signOut: async () => {
     await supabase.auth.signOut();
-    set({ user: null, company: null });
+    set({ user: null, company: null, needsOnboarding: false });
   },
 }));
+
+let listenerSetUp = false;
+
+function setupAuthListener(set: (state: Partial<AuthState>) => void) {
+  if (listenerSetUp) return;
+  listenerSetUp = true;
+
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' && session?.user) {
+      const { profile, company } = await loadProfile(session.user.id);
+      if (profile) {
+        set({ user: profile, company, needsOnboarding: false });
+      } else {
+        set({ needsOnboarding: true });
+      }
+    } else if (event === 'SIGNED_OUT') {
+      set({ user: null, company: null, needsOnboarding: false });
+    }
+  });
+}

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuthStore } from './store/auth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Upload from './pages/Upload';
 import Calls from './pages/Calls';
@@ -14,6 +15,7 @@ import Reports from './pages/Reports';
 import Comparison from './pages/Comparison';
 import Leaderboard from './pages/Leaderboard';
 import Settings from './pages/Settings';
+import AuthCallback from './pages/AuthCallback';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -25,7 +27,7 @@ const queryClient = new QueryClient({
 });
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-  const { user, initialized, initialize } = useAuthStore();
+  const { user, initialized, initialize, needsOnboarding } = useAuthStore();
 
   useEffect(() => {
     initialize();
@@ -39,7 +41,9 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!user) return <Login />;
+  if (!user && !needsOnboarding) return <Login />;
+
+  if (needsOnboarding) return <Onboarding />;
 
   return <>{children}</>;
 }
@@ -48,23 +52,31 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AuthGate>
-          <Routes>
-            <Route element={<Layout />}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/upload" element={<Upload />} />
-              <Route path="/calls" element={<Calls />} />
-              <Route path="/calls/:id" element={<CallDetail />} />
-              <Route path="/team" element={<Team />} />
-              <Route path="/team/:id" element={<SDRProfile />} />
-              <Route path="/reports" element={<Reports />} />
-              <Route path="/comparison" element={<Comparison />} />
-              <Route path="/leaderboard" element={<Leaderboard />} />
-              <Route path="/settings" element={<Settings />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </AuthGate>
+        <Routes>
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route
+            path="*"
+            element={
+              <AuthGate>
+                <Routes>
+                  <Route element={<Layout />}>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/upload" element={<Upload />} />
+                    <Route path="/calls" element={<Calls />} />
+                    <Route path="/calls/:id" element={<CallDetail />} />
+                    <Route path="/team" element={<Team />} />
+                    <Route path="/team/:id" element={<SDRProfile />} />
+                    <Route path="/reports" element={<Reports />} />
+                    <Route path="/comparison" element={<Comparison />} />
+                    <Route path="/leaderboard" element={<Leaderboard />} />
+                    <Route path="/settings" element={<Settings />} />
+                  </Route>
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </AuthGate>
+            }
+          />
+        </Routes>
       </BrowserRouter>
     </QueryClientProvider>
   );

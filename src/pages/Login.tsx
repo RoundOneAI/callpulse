@@ -12,11 +12,11 @@ export default function Login() {
     e.preventDefault();
     setError('');
 
-    try {
-      await signInWithMagicLink(email);
+    const result = await signInWithMagicLink(email);
+    if (result.success) {
       setSent(true);
-    } catch (err: any) {
-      setError(err.message || 'Something went wrong');
+    } else {
+      setError(result.error || 'Something went wrong');
     }
   }
 
@@ -39,6 +39,9 @@ export default function Login() {
               <p className="text-sm text-gray-500 mb-4">
                 We sent a magic link to <span className="font-medium text-gray-700">{email}</span>.
                 Click the link in the email to sign in.
+              </p>
+              <p className="text-xs text-gray-400 mb-4">
+                Didn&apos;t receive it? Check spam, or wait a minute and try again. If you don&apos;t have an account, contact your admin to get invited.
               </p>
               <button
                 onClick={() => { setSent(false); setEmail(''); }}

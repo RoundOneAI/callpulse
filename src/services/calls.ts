@@ -193,3 +193,16 @@ export async function updateCoachingStatus(
 
   if (error) throw error;
 }
+
+/**
+ * Delete one or more calls and their associated data via Edge Function.
+ * Uses service role key server-side — no RLS delete policies needed.
+ */
+export async function deleteCalls(callIds: string[]): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('delete-calls', {
+    body: { callIds },
+  });
+
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+}

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Phone, Search } from 'lucide-react';
+import { Phone, Search, Trash2, Loader2 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
-import { getCalls, getAudioUrl } from '../services/calls';
+import { getCalls, getAudioUrl, deleteCalls } from '../services/calls';
 import { supabase } from '../services/supabase';
 import { cn } from '../utils/cn';
 import { getScoreBadge } from '../utils/scores';
@@ -18,6 +18,9 @@ export default function Calls() {
   const [filterStatus, setFilterStatus] = useState('');
   const [search, setSearch] = useState('');
   const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!company) return;
@@ -56,6 +59,45 @@ export default function Calls() {
     return true;
   });
 
+  function toggleSelect(callId: string) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(callId)) {
+        next.delete(callId);
+      } else {
+        next.add(callId);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selected.size === filtered.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filtered.map(c => c.id)));
+    }
+  }
+
+  async function handleDelete() {
+    if (selected.size === 0) return;
+    setDeleting(true);
+
+    try {
+      await deleteCalls(Array.from(selected));
+
+      // Remove deleted calls from local state
+      setCalls(prev => prev.filter(c => !selected.has(c.id)));
+      setSelected(new Set());
+      setShowDeleteConfirm(false);
+    } catch (err: any) {
+      console.error('Delete failed:', err);
+      alert('Failed to delete calls: ' + (err.message || 'Unknown error'));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -66,7 +108,18 @@ export default function Calls() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">All Calls</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">All Calls</h1>
+        {selected.size > 0 && (
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete ({selected.size})
+          </button>
+        )}
+      </div>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
@@ -98,6 +151,7 @@ export default function Calls() {
           <option value="">All Statuses</option>
           <option value="completed">Completed</option>
           <option value="analyzing">Analyzing</option>
+          <option value="transcribing">Transcribing</option>
           <option value="failed">Failed</option>
         </select>
       </div>
@@ -107,6 +161,14 @@ export default function Calls() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
+              <th className="py-3 px-4 w-10">
+                <input
+                  type="checkbox"
+                  checked={filtered.length > 0 && selected.size === filtered.length}
+                  onChange={toggleSelectAll}
+                  className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+              </th>
               <th className="text-left py-3 px-4 font-medium text-gray-500">SDR</th>
               <th className="text-left py-3 px-4 font-medium text-gray-500">Prospect</th>
               <th className="text-left py-3 px-4 font-medium text-gray-500">Date</th>
@@ -119,8 +181,23 @@ export default function Calls() {
           <tbody>
             {filtered.map(call => {
               const analysis = (call.analysis as unknown as any[])?.[0];
+              const isSelected = selected.has(call.id);
               return (
-                <tr key={call.id} className="border-t border-gray-100 hover:bg-gray-50">
+                <tr
+                  key={call.id}
+                  className={cn(
+                    'border-t border-gray-100',
+                    isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'
+                  )}
+                >
+                  <td className="py-3 px-4">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(call.id)}
+                      className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                  </td>
                   <td className="py-3 px-4 font-medium text-gray-900">
                     {(call.sdr as unknown as Profile)?.full_name || '—'}
                   </td>
@@ -175,6 +252,48 @@ export default function Calls() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => !deleting && setShowDeleteConfirm(false)}
+          />
+          <div className="relative bg-white rounded-xl border border-gray-200 shadow-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900">Delete {selected.size} {selected.size === 1 ? 'call' : 'calls'}?</h3>
+            <p className="text-sm text-gray-500 mt-2">
+              This will permanently delete the selected {selected.size === 1 ? 'call' : 'calls'} along with {selected.size === 1 ? 'its' : 'their'} analysis, coaching items, and audio recordings. This action cannot be undone.
+            </p>
+            <div className="flex gap-3 mt-5">
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Delete Permanently
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="px-4 py-2.5 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-100 disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

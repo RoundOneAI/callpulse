@@ -194,7 +194,7 @@ export default function SDRProfile() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Calls</h2>
         <div className="space-y-2">
           {calls.slice(0, 10).map(call => {
-            const analysis = (call.analysis as unknown as any[])?.[0];
+            const analysis = call.analysis;
             return (
               <Link
                 key={call.id}

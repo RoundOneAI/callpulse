@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Phone,
   TrendingUp,
@@ -31,6 +31,7 @@ import { DIMENSIONS } from '../types';
 
 export default function Dashboard() {
   const { user, company } = useAuthStore();
+  const navigate = useNavigate();
   const [calls, setCalls] = useState<Call[]>([]);
   const [sdrs, setSdrs] = useState<Profile[]>([]);
   const [reports, setReports] = useState<WeeklyReport[]>([]);
@@ -226,28 +227,43 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {calls.slice(0, 10).map(call => (
-                  <tr key={call.id} className="border-b border-gray-50 hover:bg-gray-50">
-                    <td className="py-2 px-3">
-                      {(call.sdr as unknown as Profile)?.full_name || '—'}
-                    </td>
-                    <td className="py-2 px-3 text-gray-600">{call.prospect_name || '—'}</td>
-                    <td className="py-2 px-3 text-gray-600">{call.call_date}</td>
-                    <td className="py-2 px-3">
-                      {call.analysis ? (
-                        <span className={cn(
-                          'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-                          getScoreBadge((call.analysis as unknown as any[])?.[0]?.overall_score || 0)
-                        )}>
-                          {((call.analysis as unknown as any[])?.[0]?.overall_score || 0).toFixed(1)}
-                        </span>
-                      ) : '—'}
-                    </td>
-                    <td className="py-2 px-3">
-                      <StatusBadge status={call.status} />
-                    </td>
-                  </tr>
-                ))}
+                {calls.slice(0, 10).map(call => {
+                  const score = call.analysis?.overall_score;
+                  return (
+                    <tr
+                      key={call.id}
+                      role="link"
+                      tabIndex={0}
+                      onClick={() => navigate(`/calls/${call.id}`)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          navigate(`/calls/${call.id}`);
+                        }
+                      }}
+                      className="cursor-pointer border-b border-gray-50 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500"
+                    >
+                      <td className="py-2 px-3">
+                        {(call.sdr as unknown as Profile)?.full_name || '—'}
+                      </td>
+                      <td className="py-2 px-3 text-gray-600">{call.prospect_name || '—'}</td>
+                      <td className="py-2 px-3 text-gray-600">{call.call_date}</td>
+                      <td className="py-2 px-3">
+                        {score !== undefined ? (
+                          <span className={cn(
+                            'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
+                            getScoreBadge(score)
+                          )}>
+                            {score.toFixed(1)}
+                          </span>
+                        ) : '—'}
+                      </td>
+                      <td className="py-2 px-3">
+                        <StatusBadge status={call.status} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

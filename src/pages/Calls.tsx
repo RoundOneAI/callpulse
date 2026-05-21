@@ -180,7 +180,7 @@ export default function Calls() {
           </thead>
           <tbody>
             {filtered.map(call => {
-              const analysis = (call.analysis as unknown as any[])?.[0];
+              const analysis = call.analysis;
               const isSelected = selected.has(call.id);
               return (
                 <tr

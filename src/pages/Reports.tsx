@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { BarChart3, RefreshCw, Loader2 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { getWeeklyReports, generateWeeklyReport } from '../services/reports';
@@ -114,7 +115,12 @@ export default function Reports() {
             const comparison = report.comparison_with_previous as Record<string, number>;
 
             return (
-              <div key={report.id} className="bg-white rounded-xl border border-gray-200 p-5">
+              <Link
+                key={report.id}
+                to={`/team/${report.sdr_id}`}
+                aria-label={`View ${sdr?.full_name || 'SDR'} profile`}
+                className="group block bg-white rounded-xl border border-gray-200 p-5 transition-colors hover:border-indigo-200 hover:bg-indigo-50/30 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              >
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
                     <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center">
@@ -123,7 +129,7 @@ export default function Reports() {
                       </span>
                     </div>
                     <div>
-                      <p className="font-semibold text-gray-900">{sdr?.full_name}</p>
+                      <p className="font-semibold text-gray-900 group-hover:text-indigo-700">{sdr?.full_name}</p>
                       <p className="text-xs text-gray-500">{report.calls_analyzed} calls analyzed</p>
                     </div>
                   </div>
@@ -158,7 +164,7 @@ export default function Reports() {
                     </div>
                   ))}
                 </div>
-              </div>
+              </Link>
             );
           })}
         </div>

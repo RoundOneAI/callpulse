@@ -26,7 +26,7 @@ interface UploadItem {
   sdrId: string;
   callDate: string;
   prospectName: string;
-  status: 'pending' | 'uploading' | 'queued' | 'error';
+  status: 'pending' | 'uploading' | 'saving' | 'queued' | 'error';
   error?: string;
 }
 
@@ -109,6 +109,7 @@ export default function Upload() {
     setProcessing(true);
     setAllQueued(false);
     let queued = 0;
+    let failed = 0;
 
     // Process all uploads in parallel
     const uploads = items
@@ -116,6 +117,7 @@ export default function Upload() {
       .map(async (item) => {
         if (!item.sdrId) {
           updateItem(item.id, { status: 'error', error: 'Select an SDR' });
+          failed++;
           return;
         }
 
@@ -138,6 +140,7 @@ export default function Upload() {
               file: item.file,
               callDate: item.callDate,
               prospectName: item.prospectName || undefined,
+              onStage: (stage) => updateItem(item.id, { status: stage }),
             });
 
             // Fire and forget — processing happens server-side
@@ -154,8 +157,11 @@ export default function Upload() {
             // Text transcript: create DB record → fire-and-forget analysis
             if (!transcript) {
               updateItem(item.id, { status: 'error', error: 'No transcript content' });
+              failed++;
               return;
             }
+
+            updateItem(item.id, { status: 'saving' });
 
             const callData = await uploadCall({
               sdrId: item.sdrId,
@@ -178,6 +184,7 @@ export default function Upload() {
             queued++;
           }
         } catch (err: any) {
+          failed++;
           updateItem(item.id, {
             status: 'error',
             error: err.message || 'Failed to upload',
@@ -188,7 +195,7 @@ export default function Upload() {
     await Promise.all(uploads);
 
     setQueuedCount(queued);
-    if (queued > 0) setAllQueued(true);
+    if (queued > 0 && failed === 0) setAllQueued(true);
     setProcessing(false);
   }
 
@@ -391,6 +398,7 @@ export default function Upload() {
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {item.status === 'uploading' && 'Uploading to storage...'}
+                  {item.status === 'saving' && 'Saving call record...'}
                   {item.status === 'queued' && 'Queued — processing in background'}
                 </p>
                 {item.error && (
@@ -412,12 +420,20 @@ export default function Upload() {
                 </select>
               )}
 
-              {item.status === 'pending' && (
+              {item.status === 'error' && (
+                <button
+                  onClick={() => updateItem(item.id, { status: 'pending', error: undefined })}
+                  className="text-sm font-medium text-red-700 hover:text-red-800"
+                >
+                  Retry
+                </button>
+              )}
+              {(item.status === 'pending' || item.status === 'error') && (
                 <button onClick={() => removeItem(item.id)} className="text-gray-400 hover:text-gray-600">
                   <X className="h-4 w-4" />
                 </button>
               )}
-              {item.status === 'uploading' && (
+              {(item.status === 'uploading' || item.status === 'saving') && (
                 <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
               )}
               {item.status === 'queued' && (

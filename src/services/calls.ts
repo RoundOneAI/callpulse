@@ -2,6 +2,96 @@ import { supabase } from './supabase';
 import type { Call, CallAnalysis, CoachingItem } from '../types';
 import { getWeekNumber } from '../utils/dates';
 
+const CALL_RECORDINGS_BUCKET = 'call-recordings';
+const SAVE_TIMEOUT_MS = 30_000;
+const STORAGE_CHECK_TIMEOUT_MS = 10_000;
+const SAVE_RECOVERY_ATTEMPTS = 3;
+const SAVE_RECOVERY_DELAY_MS = 1_000;
+const MIN_UPLOAD_TIMEOUT_MS = 60_000;
+const MAX_UPLOAD_TIMEOUT_MS = 10 * 60_000;
+const MIN_UPLOAD_BYTES_PER_SECOND = 128 * 1024;
+
+class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
+function getUploadTimeoutMs(file: File): number {
+  const estimatedMs = (file.size / MIN_UPLOAD_BYTES_PER_SECOND) * 1000;
+  return Math.min(MAX_UPLOAD_TIMEOUT_MS, Math.max(MIN_UPLOAD_TIMEOUT_MS, estimatedMs));
+}
+
+async function withTimeout<T>(
+  promise: PromiseLike<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new TimeoutError(message)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([Promise.resolve(promise), timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function buildRecordingPath(companyId: string, fileName: string): string {
+  const safeName = fileName.replace(/[\\/]/g, '_');
+  return `${companyId}/${Date.now()}_${safeName}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function storageObjectExists(filePath: string): Promise<boolean> {
+  const slashIndex = filePath.lastIndexOf('/');
+  const folder = slashIndex >= 0 ? filePath.slice(0, slashIndex) : '';
+  const fileName = slashIndex >= 0 ? filePath.slice(slashIndex + 1) : filePath;
+
+  const { data, error } = await withTimeout(
+    supabase.storage
+      .from(CALL_RECORDINGS_BUCKET)
+      .list(folder, { limit: 1, search: fileName }),
+    STORAGE_CHECK_TIMEOUT_MS,
+    'Could not confirm whether the uploaded recording was saved.'
+  );
+
+  if (error) return false;
+  return (data || []).some(file => file.name === fileName);
+}
+
+async function findCallByFilePath(filePath: string): Promise<Call | null> {
+  const { data, error } = await withTimeout(
+    supabase
+      .from('calls')
+      .select('*')
+      .eq('file_path', filePath)
+      .maybeSingle(),
+    SAVE_TIMEOUT_MS,
+    'Could not confirm whether the call record was saved.'
+  );
+
+  if (error) return null;
+  return data;
+}
+
+async function waitForCallByFilePath(filePath: string): Promise<Call | null> {
+  for (let attempt = 0; attempt < SAVE_RECOVERY_ATTEMPTS; attempt++) {
+    const call = await findCallByFilePath(filePath);
+    if (call) return call;
+    await delay(SAVE_RECOVERY_DELAY_MS);
+  }
+
+  return null;
+}
+
 export async function uploadCall(params: {
   sdrId: string;
   companyId: string;
@@ -14,21 +104,25 @@ export async function uploadCall(params: {
   const weekNumber = getWeekNumber(date);
   const year = date.getFullYear();
 
-  const { data, error } = await supabase
-    .from('calls')
-    .insert({
-      sdr_id: params.sdrId,
-      company_id: params.companyId,
-      uploaded_by: params.uploadedBy,
-      transcript: params.transcript,
-      call_date: params.callDate,
-      week_number: weekNumber,
-      year: year,
-      prospect_name: params.prospectName || null,
-      status: 'analyzing',
-    })
-    .select()
-    .single();
+  const { data, error } = await withTimeout(
+    supabase
+      .from('calls')
+      .insert({
+        sdr_id: params.sdrId,
+        company_id: params.companyId,
+        uploaded_by: params.uploadedBy,
+        transcript: params.transcript,
+        call_date: params.callDate,
+        week_number: weekNumber,
+        year: year,
+        prospect_name: params.prospectName || null,
+        status: 'analyzing',
+      })
+      .select()
+      .single(),
+    SAVE_TIMEOUT_MS,
+    'The transcript was ready, but saving the call record took too long. Please try again.'
+  );
 
   if (error) throw error;
   return data;
@@ -41,43 +135,77 @@ export async function uploadAudioCall(params: {
   file: File;
   callDate: string;
   prospectName?: string;
+  onStage?: (stage: 'uploading' | 'saving') => void;
 }): Promise<Call & { filePath: string }> {
   const date = new Date(params.callDate);
   const weekNumber = getWeekNumber(date);
   const year = date.getFullYear();
 
   // Upload file to storage
-  const filePath = `${params.companyId}/${Date.now()}_${params.file.name}`;
-  const { error: uploadError } = await supabase.storage
-    .from('call-recordings')
-    .upload(filePath, params.file);
+  const filePath = buildRecordingPath(params.companyId, params.file.name);
+  params.onStage?.('uploading');
 
-  if (uploadError) throw uploadError;
+  const uploadResult = await withTimeout(
+    supabase.storage
+      .from(CALL_RECORDINGS_BUCKET)
+      .upload(filePath, params.file, {
+        contentType: params.file.type || undefined,
+      }),
+    getUploadTimeoutMs(params.file),
+    'The recording upload took too long to respond.'
+  ).catch(async (err) => {
+    if (err instanceof TimeoutError && await storageObjectExists(filePath)) {
+      return {
+        data: {
+          id: '',
+          path: filePath,
+          fullPath: `${CALL_RECORDINGS_BUCKET}/${filePath}`,
+        },
+        error: null,
+      };
+    }
+    throw err;
+  });
 
-  const { data, error } = await supabase
-    .from('calls')
-    .insert({
-      sdr_id: params.sdrId,
-      company_id: params.companyId,
-      uploaded_by: params.uploadedBy,
-      file_url: filePath,
-      file_path: filePath,
-      call_date: params.callDate,
-      week_number: weekNumber,
-      year: year,
-      prospect_name: params.prospectName || null,
-      status: 'transcribing',
-    })
-    .select()
-    .single();
+  if (uploadResult.error) throw uploadResult.error;
 
-  if (error) throw error;
-  return { ...data, filePath };
+  params.onStage?.('saving');
+
+  const saveResult = await withTimeout(
+    supabase
+      .from('calls')
+      .insert({
+        sdr_id: params.sdrId,
+        company_id: params.companyId,
+        uploaded_by: params.uploadedBy,
+        file_url: filePath,
+        file_path: filePath,
+        call_date: params.callDate,
+        week_number: weekNumber,
+        year: year,
+        prospect_name: params.prospectName || null,
+        status: 'transcribing',
+      })
+      .select()
+      .single(),
+    SAVE_TIMEOUT_MS,
+    'The recording uploaded, but saving the call record took too long. Please try again.'
+  ).catch(async (err) => {
+    if (err instanceof TimeoutError) {
+      const existingCall = await waitForCallByFilePath(filePath);
+      if (existingCall) return { data: existingCall, error: null };
+    }
+
+    throw err;
+  });
+
+  if (saveResult.error) throw saveResult.error;
+  return { ...saveResult.data, filePath };
 }
 
 export async function getAudioUrl(filePath: string): Promise<string | null> {
   const { data, error } = await supabase.storage
-    .from('call-recordings')
+    .from(CALL_RECORDINGS_BUCKET)
     .createSignedUrl(filePath, 3600); // 1 hour expiry
 
   if (error) {

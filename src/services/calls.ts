@@ -331,6 +331,15 @@ export async function deleteCalls(callIds: string[]): Promise<void> {
     body: { callIds },
   });
 
-  if (error) throw error;
+  if (error) {
+    try {
+      const responseText = await error.context.text();
+      const parsed = JSON.parse(responseText);
+      if (parsed && parsed.error) {
+        throw new Error(parsed.error);
+      }
+    } catch (_) {}
+    throw error;
+  }
   if (data?.error) throw new Error(data.error);
 }

@@ -124,25 +124,27 @@ function SidebarContent({
       )}
 
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {navigation.map((item) => {
-          const isActive = currentPath === item.href;
-          return (
-            <Link
-              key={item.name}
-              to={item.href}
-              onClick={onClose}
-              className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                isActive
-                  ? 'bg-indigo-50 text-indigo-700'
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-              )}
-            >
-              <item.icon className={cn('h-5 w-5', isActive ? 'text-indigo-600' : 'text-gray-400')} />
-              {item.name}
-            </Link>
-          );
-        })}
+        {navigation
+          .filter((item) => !((item.href === '/settings' || item.href === '/upload') && user?.role === 'sdr'))
+          .map((item) => {
+            const isActive = currentPath === item.href;
+            return (
+              <Link
+                key={item.name}
+                to={item.href}
+                onClick={onClose}
+                className={cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                  isActive
+                    ? 'bg-indigo-50 text-indigo-700'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                )}
+              >
+                <item.icon className={cn('h-5 w-5', isActive ? 'text-indigo-600' : 'text-gray-400')} />
+                {item.name}
+              </Link>
+            );
+          })}
       </nav>
 
       <div className="border-t border-gray-100 p-3">

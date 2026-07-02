@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, TrendingUp, TrendingDown, Minus, CheckCircle2, Circle, Clock } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadarChart,
@@ -17,12 +17,18 @@ import type { Profile, WeeklyReport, Call, CoachingItem } from '../types';
 
 export default function SDRProfile() {
   const { id } = useParams<{ id: string }>();
-  const { company } = useAuthStore();
+  const { company, user } = useAuthStore();
+  const navigate = useNavigate();
   const [sdr, setSdr] = useState<Profile | null>(null);
   const [trend, setTrend] = useState<WeeklyReport[]>([]);
   const [calls, setCalls] = useState<Call[]>([]);
   const [coaching, setCoaching] = useState<CoachingItem[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [hubspotEmail, setHubspotEmail] = useState('');
+  const [savingEmail, setSavingEmail] = useState(false);
+
+  const isManagerOrAdmin = user?.role === 'admin' || user?.role === 'manager';
 
   useEffect(() => {
     if (!id || !company) return;
@@ -33,12 +39,67 @@ export default function SDRProfile() {
       getCoachingItems({ companyId: company.id, sdrId: id }),
     ]).then(([{ data: sdrData }, trendData, callsData, coachingData]) => {
       setSdr(sdrData);
+      if (sdrData) {
+        setHubspotEmail(sdrData.hubspot_owner_email || '');
+      }
       setTrend(trendData);
       setCalls(callsData);
       setCoaching(coachingData);
       setLoading(false);
     });
   }, [id, company]);
+
+  async function saveHubspotEmail() {
+    if (!id) return;
+    setSavingEmail(true);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ hubspot_owner_email: hubspotEmail.trim() || null })
+        .eq('id', id);
+      if (error) throw error;
+      setSdr(prev => prev ? { ...prev, hubspot_owner_email: hubspotEmail.trim() || null } : null);
+      alert('HubSpot owner email updated successfully');
+    } catch (err) {
+      console.error('Error saving HubSpot owner email:', err);
+      alert('Failed to save HubSpot owner email');
+    } finally {
+      setSavingEmail(false);
+    }
+  }
+
+  async function deleteSdrProfile() {
+    if (!id || !sdr) return;
+    if (!window.confirm(`Are you absolutely sure you want to permanently delete SDR ${sdr.full_name}? This will delete all their call analyses, coaching items, and weekly reports. This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      const { error } = await supabase.from('profiles').delete().eq('id', id);
+      if (error) throw error;
+      alert('SDR profile deleted successfully');
+      navigate('/team');
+    } catch (err: any) {
+      console.error('Error deleting SDR:', err);
+      alert('Failed to delete SDR: ' + (err.message || 'Unknown error'));
+    }
+  }
+
+  async function toggleActiveStatus() {
+    if (!id || !sdr) return;
+    try {
+      const nextActiveState = !sdr.is_active;
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_active: nextActiveState })
+        .eq('id', id);
+      if (error) throw error;
+      setSdr(prev => prev ? { ...prev, is_active: nextActiveState } : null);
+      alert(`SDR has been ${nextActiveState ? 'activated' : 'deactivated'}.`);
+    } catch (err: any) {
+      console.error('Error updating SDR status:', err);
+      alert('Failed to update SDR status: ' + (err.message || 'Unknown error'));
+    }
+  }
 
   async function toggleCoaching(item: CoachingItem) {
     const newStatus = item.status === 'completed' ? 'open' : 'completed';
@@ -87,9 +148,63 @@ export default function SDRProfile() {
             {sdr.full_name.split(' ').map(n => n[0]).join('')}
           </span>
         </div>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold text-gray-900">{sdr.full_name}</h1>
           <p className="text-sm text-gray-500">{sdr.email}</p>
+          {isManagerOrAdmin ? (
+            <div className="space-y-2 mt-1">
+              <div className="flex items-center gap-2 bg-orange-50/50 border border-orange-100 rounded-lg px-2 py-1 w-fit">
+                <span className="text-[10px] font-semibold text-orange-600 uppercase tracking-wider">
+                  HubSpot Owner Email:
+                </span>
+                <input
+                  type="email"
+                  value={hubspotEmail}
+                  onChange={(e) => setHubspotEmail(e.target.value)}
+                  placeholder="Not configured (auto-maps by default email)"
+                  className="rounded border border-gray-300 px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-orange-500 w-64 bg-white"
+                />
+                <button
+                  onClick={saveHubspotEmail}
+                  disabled={savingEmail}
+                  className="px-2 py-0.5 bg-orange-600 text-white rounded text-[10px] font-semibold hover:bg-orange-700 disabled:opacity-50 cursor-pointer transition-colors"
+                >
+                  {savingEmail ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={toggleActiveStatus}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer shadow-sm",
+                    sdr.is_active
+                      ? "border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100"
+                      : "border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+                  )}
+                >
+                  {sdr.is_active ? 'Deactivate SDR' : 'Activate SDR'}
+                </button>
+                <button
+                  onClick={deleteSdrProfile}
+                  className="px-2.5 py-1 text-[11px] font-semibold rounded-lg border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 transition-colors cursor-pointer shadow-sm"
+                >
+                  Delete SDR Profile
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1 mt-1">
+              {sdr.hubspot_owner_email && (
+                <p className="text-xs text-gray-400">HubSpot Email: {sdr.hubspot_owner_email}</p>
+              )}
+              {!sdr.is_active && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-200">
+                  Inactive
+                </span>
+              )}
+            </div>
+          )}
         </div>
         {latestScores && (
           <div className="ml-auto text-right">

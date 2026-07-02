@@ -3,13 +3,12 @@ import { Link } from 'react-router-dom';
 import { Users, UserPlus, TrendingUp, TrendingDown, Minus, Loader2 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { supabase } from '../services/supabase';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { getWeeklyReports } from '../services/reports';
 import { getCurrentWeek } from '../utils/dates';
 import { cn } from '../utils/cn';
 import { getScoreColor } from '../utils/scores';
 import type { Profile, WeeklyReport } from '../types';
-
-type AddMode = 'quick' | 'invite';
 
 export default function Team() {
   const { user, company } = useAuthStore();
@@ -17,7 +16,7 @@ export default function Team() {
   const [reports, setReports] = useState<WeeklyReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [addMode, setAddMode] = useState<AddMode>('quick');
+  const [sendInvite, setSendInvite] = useState(true);
   const [form, setForm] = useState({ email: '', fullName: '', role: 'sdr' });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
@@ -43,8 +42,14 @@ export default function Team() {
     setSdrs(data || []);
   }
 
-  async function quickAdd() {
-    if (!company || !form.fullName.trim()) {
+  async function handleSubmit(e?: React.FormEvent) {
+    if (e) e.preventDefault();
+    if (!company) return;
+
+    const fullName = form.fullName.trim();
+    const email = form.email.trim();
+
+    if (!fullName) {
       setFormError('Name is required');
       return;
     }
@@ -53,60 +58,60 @@ export default function Team() {
     setFormError('');
 
     try {
-      // Create a placeholder profile directly — no auth account needed.
-      // This SDR will appear in dropdowns for call assignment.
-      // They can be invited later to get their own login.
-      const { error } = await supabase.from('profiles').insert({
-        id: crypto.randomUUID(),
-        company_id: company.id,
-        full_name: form.fullName.trim(),
-        email: form.email.trim() || `${form.fullName.trim().toLowerCase().replace(/\s+/g, '.')}@placeholder.local`,
-        role: form.role as any,
-      });
+      if (email && sendInvite) {
+        const { data, error } = await supabase.functions.invoke('invite-user', {
+          body: {
+            email: email,
+            fullName: fullName,
+            role: form.role,
+            companyId: company.id,
+          },
+        });
 
-      if (error) throw error;
+        if (error) {
+          let customMsg = error.message;
+          if (error instanceof FunctionsHttpError) {
+            try {
+              const body = await error.context.json();
+              if (body && body.error) {
+                customMsg = body.error;
+              }
+            } catch (e) {
+              // Ignore parsing error
+            }
+          }
+          throw new Error(customMsg);
+        }
+        if (data?.error) throw new Error(data.error);
+      } else {
+        // Create a placeholder profile directly — no auth account needed.
+        // This SDR will appear in dropdowns for call assignment.
+        // They can be invited later to get their own login.
+        const { error } = await supabase.from('profiles').insert({
+          id: crypto.randomUUID(),
+          company_id: company.id,
+          full_name: fullName,
+          email: email || `${fullName.toLowerCase().replace(/\s+/g, '.')}@placeholder.local`,
+          role: form.role as any,
+        });
 
-      setShowAdd(false);
-      setForm({ email: '', fullName: '', role: 'sdr' });
-      await refreshTeam();
-    } catch (err: any) {
-      setFormError(err.message || 'Failed to add member');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function inviteUser() {
-    if (!company || !form.email.trim() || !form.fullName.trim()) {
-      setFormError('Name and email are required for invites');
-      return;
-    }
-
-    setSubmitting(true);
-    setFormError('');
-
-    try {
-      const { data, error } = await supabase.functions.invoke('invite-user', {
-        body: {
-          email: form.email,
-          fullName: form.fullName,
-          role: form.role,
-          companyId: company.id,
-        },
-      });
-
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+        if (error) throw error;
+      }
 
       setShowAdd(false);
       setForm({ email: '', fullName: '', role: 'sdr' });
+      setSendInvite(true);
       await refreshTeam();
     } catch (err: any) {
-      setFormError(
-        err.message?.includes('401') || err.message?.includes('404') || err.message?.includes('Failed to fetch')
-          ? 'Edge Function not deployed yet. Use "Quick Add" instead, or deploy the invite-user function first.'
-          : err.message || 'Failed to invite user'
-      );
+      if (email && sendInvite) {
+        setFormError(
+          err.message?.includes('401') || err.message?.includes('404') || err.message?.includes('Failed to fetch')
+            ? 'Edge Function not deployed yet. Uncheck "Invite via email" to add directly, or deploy the invite-user function first.'
+            : err.message || 'Failed to invite user'
+        );
+      } else {
+        setFormError(err.message || 'Failed to add member');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -116,6 +121,7 @@ export default function Team() {
     setShowAdd(false);
     setFormError('');
     setForm({ email: '', fullName: '', role: 'sdr' });
+    setSendInvite(true);
   }
 
   if (loading) {
@@ -142,84 +148,87 @@ export default function Team() {
 
       {/* Add member form */}
       {showAdd && (
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-          {/* Mode toggle */}
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit">
-            <button
-              onClick={() => { setAddMode('quick'); setFormError(''); }}
-              className={cn(
-                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-                addMode === 'quick' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              )}
-            >
-              Quick Add
-            </button>
-            <button
-              onClick={() => { setAddMode('invite'); setFormError(''); }}
-              className={cn(
-                'px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
-                addMode === 'invite' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              )}
-            >
-              Send Invite
-            </button>
-          </div>
-
+        <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <div>
-            <p className="text-sm text-gray-500">
-              {addMode === 'quick'
-                ? 'Add a team member for call tracking. You can invite them to log in later.'
-                : 'Send a magic link email so they can log in and see their own scores.'}
+            <h3 className="text-sm font-semibold text-gray-900">Add Team Member</h3>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Add a team member for call tracking. If email is provided, you can optionally invite them to log in.
             </p>
           </div>
 
-          <div className={cn('grid gap-4', addMode === 'invite' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2')}>
-            <input
-              type="text"
-              value={form.fullName}
-              onChange={e => setForm(f => ({ ...f, fullName: e.target.value }))}
-              placeholder="Full Name"
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            {addMode === 'invite' && (
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+            <div className="flex flex-col gap-1">
+              <label htmlFor="fullName" className="text-xs font-medium text-gray-500">Full Name</label>
               <input
+                id="fullName"
+                type="text"
+                value={form.fullName}
+                onChange={e => setForm(f => ({ ...f, fullName: e.target.value }))}
+                placeholder="Name"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="email" className="text-xs font-medium text-gray-500">Email (optional)</label>
+              <input
+                id="email"
                 type="email"
                 value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
-                placeholder="Email"
+                placeholder="email@example.com"
                 className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
-            )}
-            <select
-              value={form.role}
-              onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="sdr">SDR</option>
-              <option value="manager">Manager</option>
-              <option value="admin">Admin</option>
-            </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="role" className="text-xs font-medium text-gray-500">Role</label>
+              <select
+                id="role"
+                value={form.role}
+                onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="sdr">SDR</option>
+                <option value="manager">Manager</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
           </div>
+
+          {form.email.trim() !== '' && (
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                id="sendInvite"
+                type="checkbox"
+                checked={sendInvite}
+                onChange={e => setSendInvite(e.target.checked)}
+                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+              />
+              <label htmlFor="sendInvite" className="text-sm text-gray-600 cursor-pointer select-none">
+                Invite via email (sends magic link)
+              </label>
+            </div>
+          )}
 
           {formError && <p className="text-sm text-red-600">{formError}</p>}
 
           <div className="flex gap-2">
             <button
-              onClick={addMode === 'quick' ? quickAdd : inviteUser}
+              type="submit"
               disabled={submitting}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50"
             >
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              {submitting ? 'Adding...' : addMode === 'quick' ? 'Add Member' : 'Send Invite'}
+              {submitting ? 'Adding...' : 'Add Member'}
             </button>
             <button
+              type="button"
               onClick={closeForm}
               className="px-4 py-2 text-gray-600 text-sm rounded-lg hover:bg-gray-100"
             >
               Cancel
             </button>
           </div>
-        </div>
+        </form>
       )}
 
       {/* Team grid */}

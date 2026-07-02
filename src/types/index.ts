@@ -15,6 +15,7 @@ export interface Profile {
   email: string;
   role: UserRole;
   is_active: boolean;
+  hubspot_owner_email?: string | null;
   created_at: string;
 }
 
@@ -33,6 +34,7 @@ export interface Call {
   prospect_name: string | null;
   status: CallStatus;
   created_at: string;
+  hubspot_call_id?: string | null;
   // Joined fields
   sdr?: Profile;
   analysis?: CallAnalysis;
@@ -126,3 +128,31 @@ export const DIMENSIONS = [
 ] as const;
 
 export type DimensionKey = typeof DIMENSIONS[number]['key'];
+
+export interface Integration {
+  id: string;
+  company_id: string;
+  type: 'hubspot';
+  credentials: {
+    private_token?: string;
+  };
+  settings: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HubSpotCall {
+  hubspotCallId: string;
+  title: string;
+  body: string;
+  durationSeconds: number;
+  recordingUrl: string | null;
+  timestamp: number;
+  ownerId: string | null;
+  ownerEmail: string | null;
+  suggestedSdrId: string | null;
+  suggestedSdrName: string | null;
+  prospectName?: string;
+  alreadyImported: boolean;
+}

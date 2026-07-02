@@ -48,6 +48,14 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuthStore();
+  if (user?.role === 'sdr') {
+    return <Navigate to="/" replace />;
+  }
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -61,7 +69,14 @@ export default function App() {
                 <Routes>
                   <Route element={<Layout />}>
                     <Route path="/" element={<Dashboard />} />
-                    <Route path="/upload" element={<Upload />} />
+                    <Route
+                      path="/upload"
+                      element={
+                        <AdminRoute>
+                          <Upload />
+                        </AdminRoute>
+                      }
+                    />
                     <Route path="/calls" element={<Calls />} />
                     <Route path="/calls/:id" element={<CallDetail />} />
                     <Route path="/team" element={<Team />} />
@@ -69,7 +84,14 @@ export default function App() {
                     <Route path="/reports" element={<Reports />} />
                     <Route path="/comparison" element={<Comparison />} />
                     <Route path="/leaderboard" element={<Leaderboard />} />
-                    <Route path="/settings" element={<Settings />} />
+                    <Route
+                      path="/settings"
+                      element={
+                        <AdminRoute>
+                          <Settings />
+                        </AdminRoute>
+                      }
+                    />
                   </Route>
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

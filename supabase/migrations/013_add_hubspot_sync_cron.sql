@@ -19,7 +19,7 @@ SELECT cron.schedule(
   '0 * * * *',
   $$
   SELECT net.http_post(
-    url := 'http://kong:8000/functions/v1/hubspot',
+    url := 'https://dcvopglyshlpmeugharm.supabase.co/functions/v1/hubspot',
     headers := '{"Content-Type": "application/json", "Authorization": "Bearer callpulse-sync-cron-key-987654321"}'::jsonb,
     body := '{"action": "cron-sync"}'::jsonb
   );

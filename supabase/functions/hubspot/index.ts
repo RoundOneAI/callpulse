@@ -485,6 +485,21 @@ serve(async (req) => {
           const hsData = await hsResponse.json();
           const hsCalls = hsData.results || [];
           if (hsCalls.length === 0) {
+            try {
+              const { error: logErr } = await supabaseAdmin
+                .from('hubspot_sync_runs')
+                .insert({
+                  company_id: companyId,
+                  status: 'success',
+                  imported_count: 0,
+                });
+              if (logErr) {
+                console.error('Error logging successful empty cron sync:', logErr);
+              }
+            } catch (logErr) {
+              console.error('Error logging successful empty cron sync exception:', logErr);
+            }
+
             syncResults.push({ companyId, importedCount: 0 });
             continue;
           }
@@ -622,15 +637,18 @@ serve(async (req) => {
 
           // Log cron sync run success
           try {
-            await supabaseAdmin
+            const { error: logErr } = await supabaseAdmin
               .from('hubspot_sync_runs')
               .insert({
                 company_id: companyId,
                 status: 'success',
                 imported_count: importedCount,
               });
+            if (logErr) {
+              console.error('Error logging successful cron sync (returned):', logErr);
+            }
           } catch (logErr) {
-            console.error('Error logging successful cron sync:', logErr);
+            console.error('Error logging successful cron sync (exception):', logErr);
           }
 
           syncResults.push({ companyId, importedCount });
@@ -639,7 +657,7 @@ serve(async (req) => {
           
           // Log cron sync run failure
           try {
-            await supabaseAdmin
+            const { error: logErr } = await supabaseAdmin
               .from('hubspot_sync_runs')
               .insert({
                 company_id: companyId,
@@ -647,8 +665,11 @@ serve(async (req) => {
                 imported_count: 0,
                 error_message: err.message || 'Unknown error',
               });
+            if (logErr) {
+              console.error('Error logging failed cron sync (returned):', logErr);
+            }
           } catch (logErr) {
-            console.error('Error logging failed cron sync:', logErr);
+            console.error('Error logging failed cron sync (exception):', logErr);
           }
 
           syncResults.push({ companyId, error: err.message });

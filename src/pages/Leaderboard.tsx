@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Trophy, Medal, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { getWeeklyReports } from '../services/reports';
@@ -131,7 +132,9 @@ export default function Leaderboard() {
                   </td>
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900">{entry.name}</span>
+                      <Link to={`/team/${entry.id}`} className="font-medium text-gray-900 hover:text-indigo-600 hover:underline transition-all">
+                        {entry.name}
+                      </Link>
                       {entry.comparison?.overall !== undefined && (
                         entry.comparison.overall > 0.3 ? (
                           <TrendingUp className="h-3 w-3 text-emerald-500" />

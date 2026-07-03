@@ -105,3 +105,28 @@ export async function importHubSpotCalls(calls: HubSpotCallImportParam[]): Promi
 
   return data;
 }
+
+export interface HubSpotSyncRun {
+  id: string;
+  company_id: string;
+  status: 'success' | 'failed';
+  imported_count: number;
+  error_message: string | null;
+  run_at: string;
+}
+
+export async function getLatestSyncRun(companyId: string): Promise<HubSpotSyncRun | null> {
+  const { data, error } = await supabase
+    .from('hubspot_sync_runs')
+    .select('*')
+    .eq('company_id', companyId)
+    .order('run_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error fetching latest sync run:', error);
+    return null;
+  }
+  return data as any;
+}

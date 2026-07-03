@@ -16,7 +16,7 @@ import { DIMENSIONS } from '../types';
 import type { Profile, WeeklyReport, Call, CoachingItem } from '../types';
 
 export default function SDRProfile() {
-  const { id } = useParams<{ id: string }>();
+  const { id: paramId } = useParams<{ id: string }>();
   const { company, user } = useAuthStore();
   const navigate = useNavigate();
   const [sdr, setSdr] = useState<Profile | null>(null);
@@ -28,10 +28,17 @@ export default function SDRProfile() {
   const [hubspotEmail, setHubspotEmail] = useState('');
   const [savingEmail, setSavingEmail] = useState(false);
 
+  const id = paramId || user?.id;
   const isManagerOrAdmin = user?.role === 'admin' || user?.role === 'manager';
+  const isSdr = user?.role === 'sdr';
+  const isViewingSelf = id === user?.id;
 
   useEffect(() => {
     if (!id || !company) return;
+    if (isSdr && !isViewingSelf) {
+      setLoading(false);
+      return;
+    }
     Promise.all([
       supabase.from('profiles').select('*').eq('id', id).single(),
       getSDRTrend(id, 8),
@@ -47,7 +54,7 @@ export default function SDRProfile() {
       setCoaching(coachingData);
       setLoading(false);
     });
-  }, [id, company]);
+  }, [id, company, isSdr, isViewingSelf]);
 
   async function saveHubspotEmail() {
     if (!id) return;
@@ -109,6 +116,14 @@ export default function SDRProfile() {
     );
   }
 
+  if (isSdr && !isViewingSelf) {
+    return (
+      <div className="text-center py-12 text-gray-500 font-medium">
+        Access Denied. You do not have permission to view other SDR profiles.
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -138,9 +153,11 @@ export default function SDRProfile() {
 
   return (
     <div className="space-y-6 max-w-6xl">
-      <Link to="/team" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-        <ArrowLeft className="h-4 w-4" /> Back to team
-      </Link>
+      {!isSdr && (
+        <Link to="/team" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
+          <ArrowLeft className="h-4 w-4" /> Back to team
+        </Link>
+      )}
 
       <div className="flex items-center gap-4">
         <div className="h-14 w-14 rounded-full bg-indigo-100 flex items-center justify-center">
@@ -306,7 +323,15 @@ export default function SDRProfile() {
 
       {/* Recent calls */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Calls</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900">Recent Calls</h2>
+          <Link
+            to={`/team/${sdr.id}/calls`}
+            className="text-sm font-medium text-indigo-600 hover:text-indigo-700 transition-colors"
+          >
+            View All Calls
+          </Link>
+        </div>
         <div className="space-y-2">
           {calls.slice(0, 10).map(call => {
             const analysis = call.analysis;
@@ -314,6 +339,7 @@ export default function SDRProfile() {
               <Link
                 key={call.id}
                 to={`/calls/${call.id}`}
+                state={{ callIds: calls.map(c => c.id), backUrl: `/team/${sdr.id}` }}
                 className="flex items-center gap-3 py-2 border-b border-gray-50 last:border-0 hover:bg-gray-50 -mx-2 px-2 rounded"
               >
                 <span className="text-sm text-gray-500 w-24">{call.call_date}</span>

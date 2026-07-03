@@ -76,6 +76,7 @@ export default function Dashboard() {
     .map(r => {
       const sdr = sdrs.find(s => s.id === r.sdr_id);
       return {
+        sdr_id: r.sdr_id,
         name: sdr?.full_name || 'Unknown',
         score: (r.avg_scores as Record<string, number>).overall || 0,
         calls: r.calls_analyzed,
@@ -181,7 +182,9 @@ export default function Dashboard() {
                     {i + 1}
                   </span>
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-900">{entry.name}</p>
+                    <Link to={`/team/${entry.sdr_id}`} className="text-sm font-medium text-gray-900 hover:text-indigo-600 hover:underline transition-all">
+                      {entry.name}
+                    </Link>
                     <p className="text-xs text-gray-500">{entry.calls} calls</p>
                   </div>
                   <span className={cn('text-sm font-bold', getScoreColor(entry.score))}>
@@ -234,11 +237,11 @@ export default function Dashboard() {
                       key={call.id}
                       role="link"
                       tabIndex={0}
-                      onClick={() => navigate(`/calls/${call.id}`)}
+                      onClick={() => navigate(`/calls/${call.id}`, { state: { callIds: calls.slice(0, 10).map(c => c.id), backUrl: '/' } })}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.preventDefault();
-                          navigate(`/calls/${call.id}`);
+                          navigate(`/calls/${call.id}`, { state: { callIds: calls.slice(0, 10).map(c => c.id), backUrl: '/' } });
                         }
                       }}
                       className="cursor-pointer border-b border-gray-50 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-indigo-500"

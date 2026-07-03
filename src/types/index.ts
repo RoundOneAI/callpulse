@@ -5,6 +5,7 @@ export type CoachingStatus = 'open' | 'in_progress' | 'completed';
 export interface Company {
   id: string;
   name: string;
+  allow_sdr_view_all?: boolean;
   created_at: string;
 }
 
@@ -35,6 +36,8 @@ export interface Call {
   status: CallStatus;
   created_at: string;
   hubspot_call_id?: string | null;
+  hubspot_contact_id?: string | null;
+  hubspot_portal_id?: string | null;
   // Joined fields
   sdr?: Profile;
   analysis?: CallAnalysis;
@@ -85,6 +88,9 @@ export interface CoachingItem {
   status: CoachingStatus;
   created_at: string;
   completed_at: string | null;
+  call_analyses?: {
+    call_id: string;
+  } | null;
 }
 
 export interface WeeklyReport {

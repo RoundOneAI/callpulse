@@ -12,12 +12,14 @@ import {
   X,
   Activity,
   Trophy,
+  User,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { useAuthStore } from '../store/auth';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { name: 'My Performance', href: '/my-performance', icon: User },
   { name: 'Upload Calls', href: '/upload', icon: Upload },
   { name: 'All Calls', href: '/calls', icon: Phone },
   { name: 'Team', href: '/team', icon: Users },
@@ -125,7 +127,15 @@ function SidebarContent({
 
       <nav className="flex-1 px-3 py-4 space-y-1">
         {navigation
-          .filter((item) => !((item.href === '/settings' || item.href === '/upload') && user?.role === 'sdr'))
+          .filter((item) => {
+            if (user?.role === 'sdr') {
+              // Hide Dashboard, Settings, Upload, and Team for SDRs
+              return item.href !== '/' && item.href !== '/settings' && item.href !== '/upload' && item.href !== '/team';
+            } else {
+              // Hide My Performance for Managers/Admins
+              return item.href !== '/my-performance';
+            }
+          })
           .map((item) => {
             const isActive = currentPath === item.href;
             return (

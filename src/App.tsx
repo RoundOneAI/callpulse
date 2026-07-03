@@ -11,6 +11,7 @@ import Calls from './pages/Calls';
 import CallDetail from './pages/CallDetail';
 import Team from './pages/Team';
 import SDRProfile from './pages/SDRProfile';
+import SDRCalls from './pages/SDRCalls';
 import Reports from './pages/Reports';
 import Comparison from './pages/Comparison';
 import Leaderboard from './pages/Leaderboard';
@@ -56,6 +57,14 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function DashboardRoute() {
+  const { user } = useAuthStore();
+  if (user?.role === 'sdr') {
+    return <Navigate to="/my-performance" replace />;
+  }
+  return <Dashboard />;
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -68,7 +77,8 @@ export default function App() {
               <AuthGate>
                 <Routes>
                   <Route element={<Layout />}>
-                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/" element={<DashboardRoute />} />
+                    <Route path="/my-performance" element={<SDRCalls />} />
                     <Route
                       path="/upload"
                       element={
@@ -80,7 +90,8 @@ export default function App() {
                     <Route path="/calls" element={<Calls />} />
                     <Route path="/calls/:id" element={<CallDetail />} />
                     <Route path="/team" element={<Team />} />
-                    <Route path="/team/:id" element={<SDRProfile />} />
+                    <Route path="/team/:id" element={<SDRCalls />} />
+                    <Route path="/team/:id/calls" element={<SDRCalls />} />
                     <Route path="/reports" element={<Reports />} />
                     <Route path="/comparison" element={<Comparison />} />
                     <Route path="/leaderboard" element={<Leaderboard />} />

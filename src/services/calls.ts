@@ -295,7 +295,12 @@ export async function getCoachingItems(params: {
 }): Promise<CoachingItem[]> {
   let query = supabase
     .from('coaching_items')
-    .select('*')
+    .select(`
+      *,
+      call_analyses (
+        call_id
+      )
+    `)
     .eq('company_id', params.companyId)
     .order('created_at', { ascending: false });
 
@@ -304,7 +309,7 @@ export async function getCoachingItems(params: {
 
   const { data, error } = await query;
   if (error) throw error;
-  return data || [];
+  return (data as any) || [];
 }
 
 export async function updateCoachingStatus(

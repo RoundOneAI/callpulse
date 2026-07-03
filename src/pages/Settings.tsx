@@ -2,19 +2,39 @@ import { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Building, Save, Link2, KeyRound } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { supabase } from '../services/supabase';
-import { getHubSpotIntegration, saveHubSpotIntegration } from '../services/hubspot';
+import { getHubSpotIntegration, saveHubSpotIntegration, getLatestSyncRun, HubSpotSyncRun } from '../services/hubspot';
 
 export default function Settings() {
-  const { user, company } = useAuthStore();
+  const { user, company, refreshProfile } = useAuthStore();
   const [companyName, setCompanyName] = useState(company?.name || '');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const [allowSdrViewAll, setAllowSdrViewAll] = useState(company?.allow_sdr_view_all || false);
+  const [savingSharing, setSavingSharing] = useState(false);
 
   const [hubspotToken, setHubspotToken] = useState('');
   const [hubspotActive, setHubspotActive] = useState(false);
   const [loadingIntegration, setLoadingIntegration] = useState(false);
   const [savingHubspot, setSavingHubspot] = useState(false);
   const [savedHubspot, setSavedHubspot] = useState(false);
+  const [latestSync, setLatestSync] = useState<HubSpotSyncRun | null>(null);
+
+  useEffect(() => {
+    async function loadSyncInfo() {
+      if (!company) return;
+      const run = await getLatestSyncRun(company.id);
+      setLatestSync(run);
+    }
+    loadSyncInfo();
+  }, [company]);
+
+  useEffect(() => {
+    if (company) {
+      setCompanyName(company.name);
+      setAllowSdrViewAll(company.allow_sdr_view_all || false);
+    }
+  }, [company]);
 
   useEffect(() => {
     async function loadIntegration() {
@@ -68,6 +88,26 @@ export default function Settings() {
     setTimeout(() => setSaved(false), 2000);
   }
 
+  async function handleToggleSharing(val: boolean) {
+    if (!company) return;
+    setSavingSharing(true);
+    try {
+      const { error } = await supabase
+        .from('companies')
+        .update({ allow_sdr_view_all: val })
+        .eq('id', company.id);
+
+      if (error) throw error;
+      setAllowSdrViewAll(val);
+      await refreshProfile();
+    } catch (err) {
+      console.error('Error updating sharing policy:', err);
+      alert('Failed to update sharing policy');
+    } finally {
+      setSavingSharing(false);
+    }
+  }
+
   return (
     <div className="space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
@@ -103,6 +143,27 @@ export default function Settings() {
             <p className="text-sm text-gray-500 font-mono bg-gray-50 rounded px-3 py-2">{company?.id}</p>
             <p className="text-xs text-gray-400 mt-1">Share this with new team members when they sign up</p>
           </div>
+          {(user?.role === 'admin' || user?.role === 'manager') && (
+            <div className="border-t border-gray-100 pt-4 flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-semibold text-gray-800">Team Sharing Policy</label>
+                <p className="text-xs text-gray-500 mt-0.5">Allow SDRs to view other team members' calls and performance stats.</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allowSdrViewAll}
+                  onChange={(e) => handleToggleSharing(e.target.checked)}
+                  disabled={savingSharing}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+                <span className="ms-2 text-xs font-semibold text-gray-700 w-16">
+                  {savingSharing ? 'Saving...' : allowSdrViewAll ? 'Enabled' : 'Disabled'}
+                </span>
+              </label>
+            </div>
+          )}
         </div>
       </div>
 
@@ -193,43 +254,37 @@ export default function Settings() {
                   <p className="text-[10px] text-gray-400 mt-1">
                     Create a Private App in HubSpot with scopes: <code className="bg-gray-100 px-1 rounded">crm.objects.contacts.read</code>, <code className="bg-gray-100 px-1 rounded">crm.objects.owners.read</code>, and recording access.
                   </p>
+                  {hubspotActive && (
+                    <div className="mt-4 border-t border-gray-100 pt-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block">Sync Status</span>
+                          {latestSync ? (
+                            <p className="text-xs text-gray-700 mt-0.5">
+                              Last sync: <span className="font-semibold text-gray-900">{new Date(latestSync.run_at).toLocaleString()}</span> 
+                              {latestSync.status === 'success' ? (
+                                <span className="text-green-600 bg-green-50 px-1.5 py-0.5 rounded ml-2 font-medium">Success ({latestSync.imported_count} imported)</span>
+                              ) : (
+                                <span className="text-red-600 bg-red-50 px-1.5 py-0.5 rounded ml-2 font-medium">Failed</span>
+                              )}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-500 mt-0.5">No sync history recorded yet</p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block">Next Scheduled Sync</span>
+                          <p className="text-xs text-gray-800 mt-0.5 font-medium">Hourly, on the hour</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
           </div>
         </div>
       )}
-
-      {/* Setup guide */}
-      <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-5">
-        <h2 className="text-lg font-semibold text-indigo-900 mb-3">Setup Guide</h2>
-        <div className="space-y-3 text-sm text-indigo-800">
-          <div className="flex gap-3">
-            <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">1</span>
-            <p>Set up your Supabase project and run the migration SQL in the SQL Editor</p>
-          </div>
-          <div className="flex gap-3">
-            <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">2</span>
-            <p>Add your Supabase URL and Anon Key to the .env file</p>
-          </div>
-          <div className="flex gap-3">
-            <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">3</span>
-            <p>Deploy Edge Functions and set secrets: <code className="bg-indigo-100 px-1 rounded">ANTHROPIC_API_KEY</code>, <code className="bg-indigo-100 px-1 rounded">DEEPGRAM_API_KEY</code></p>
-          </div>
-          <div className="flex gap-3">
-            <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">4</span>
-            <p>Invite your first admin user, then invite SDRs and managers from the Team page</p>
-          </div>
-          <div className="flex gap-3">
-            <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">5</span>
-            <p>Upload call transcripts or audio recordings on the Upload page</p>
-          </div>
-          <div className="flex gap-3">
-            <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-200 text-indigo-700 flex items-center justify-center text-xs font-bold">6</span>
-            <p>Generate weekly reports from the Reports page to see trends and comparisons</p>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

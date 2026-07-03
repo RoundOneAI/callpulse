@@ -13,6 +13,7 @@ create type coaching_status as enum ('open', 'in_progress', 'completed');
 create table companies (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
+  allow_sdr_view_all boolean default false,
   created_at timestamptz default now()
 );
 
@@ -41,6 +42,8 @@ create table calls (
   duration_seconds integer,
   prospect_name text,
   status call_status not null default 'uploading',
+  hubspot_contact_id text,
+  hubspot_portal_id text,
   created_at timestamptz default now()
 );
 
@@ -216,3 +219,18 @@ create policy "Users read own company files" on storage.objects
     bucket_id = 'call-recordings'
     and auth.uid() is not null
   );
+
+-- HubSpot sync runs table
+create table hubspot_sync_runs (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id) on delete cascade not null,
+  status text not null,
+  imported_count integer not null default 0,
+  error_message text,
+  run_at timestamptz not null default now()
+);
+
+alter table hubspot_sync_runs enable row level security;
+
+create policy "Users see company sync logs" on hubspot_sync_runs
+  for select using (company_id = public.get_my_company_id());

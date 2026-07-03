@@ -121,6 +121,8 @@ serve(async (req) => {
     }
 
     let transcript = providedTranscript || '';
+    let isEmptyTranscript = false;
+    let durationSeconds = 0;
 
     // ─── STEP 1: Transcribe (if audio file) ───────────────────────
     if (filePath && !transcript) {
@@ -192,11 +194,12 @@ serve(async (req) => {
         }
       }
 
-      if (!transcript) {
-        throw new Error('Transcription returned empty result');
-      }
+      durationSeconds = Math.round(deepgramData.metadata?.duration || 0);
 
-      const durationSeconds = Math.round(deepgramData.metadata?.duration || 0);
+      if (!transcript.trim()) {
+        isEmptyTranscript = true;
+        transcript = "[No speech detected in call recording]";
+      }
 
       // Save transcript to call record
       await supabaseAdmin
@@ -213,45 +216,70 @@ serve(async (req) => {
         .from('calls')
         .update({ status: 'analyzing' })
         .eq('id', callId);
+
+      if (!transcript.trim()) {
+        isEmptyTranscript = true;
+        transcript = "[No speech detected in call recording]";
+      }
     }
 
-    // ─── STEP 2: Analyze with Claude ──────────────────────────────
-    const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
-    if (!anthropicApiKey) {
-      throw new Error('Anthropic API key not configured');
+    let analysis;
+
+    if (isEmptyTranscript) {
+      analysis = {
+        overall_score: 0,
+        prospect_name: null,
+        dimensions: {
+          opening: { score: 0, justification: "No speech detected in the recording.", quotes: [], coaching_suggestion: "N/A" },
+          discovery: { score: 0, justification: "No speech detected in the recording.", quotes: [], coaching_suggestion: "N/A" },
+          value_prop: { score: 0, justification: "No speech detected in the recording.", quotes: [], coaching_suggestion: "N/A" },
+          objection: { score: 0, justification: "No speech detected in the recording.", quotes: [], coaching_suggestion: "N/A" },
+          closing: { score: 0, justification: "No speech detected in the recording.", quotes: [], coaching_suggestion: "N/A" },
+          tone: { score: 0, justification: "No speech detected in the recording.", quotes: [], coaching_suggestion: "N/A" }
+        },
+        strengths: [],
+        weaknesses: [],
+        summary: "No speech detected. The call recording appears to contain unanswered ringing, busy signal, silence, or music only."
+      };
+    } else {
+      // ─── STEP 2: Analyze with Claude ──────────────────────────────
+      const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY');
+      if (!anthropicApiKey) {
+        throw new Error('Anthropic API key not configured');
+      }
+
+      const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': anthropicApiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-5-20250929',
+          max_tokens: 4096,
+          messages: [
+            {
+              role: 'user',
+              content: `${ANALYSIS_PROMPT}\n\nHere is the transcript to analyze:\n\n${transcript}`,
+            },
+          ],
+        }),
+      });
+
+      if (!claudeResponse.ok) {
+        const errText = await claudeResponse.text();
+        throw new Error(`Claude API error: ${errText}`);
+      }
+
+      const claudeData = await claudeResponse.json();
+      const content = claudeData.content[0].text;
+
+      // Extract JSON from response
+      const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || [null, content];
+      const jsonStr = jsonMatch[1] || content;
+      analysis = JSON.parse(jsonStr);
     }
-
-    const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicApiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 4096,
-        messages: [
-          {
-            role: 'user',
-            content: `${ANALYSIS_PROMPT}\n\nHere is the transcript to analyze:\n\n${transcript}`,
-          },
-        ],
-      }),
-    });
-
-    if (!claudeResponse.ok) {
-      const errText = await claudeResponse.text();
-      throw new Error(`Claude API error: ${errText}`);
-    }
-
-    const claudeData = await claudeResponse.json();
-    const content = claudeData.content[0].text;
-
-    // Extract JSON from response
-    const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) || [null, content];
-    const jsonStr = jsonMatch[1] || content;
-    const analysis = JSON.parse(jsonStr);
 
     // Save analysis
     const { data: savedAnalysis, error: analysisError } = await supabaseAdmin
@@ -288,17 +316,21 @@ serve(async (req) => {
       throw new Error(`Failed to save analysis: ${analysisError.message}`);
     }
 
-    // Create coaching items
-    const coachingItems = Object.entries(analysis.dimensions).map(([dimension, dim]: [string, any]) => ({
-      call_analysis_id: savedAnalysis.id,
-      sdr_id: sdrId,
-      company_id: companyId,
-      dimension,
-      action_item: dim.coaching_suggestion,
-      status: 'open',
-    }));
+    // Create coaching items (filtering out 'N/A' actions)
+    const coachingItems = Object.entries(analysis.dimensions)
+      .filter(([_, dim]: [string, any]) => dim.coaching_suggestion && dim.coaching_suggestion !== 'N/A')
+      .map(([dimension, dim]: [string, any]) => ({
+        call_analysis_id: savedAnalysis.id,
+        sdr_id: sdrId,
+        company_id: companyId,
+        dimension,
+        action_item: dim.coaching_suggestion,
+        status: 'open',
+      }));
 
-    await supabaseAdmin.from('coaching_items').insert(coachingItems);
+    if (coachingItems.length > 0) {
+      await supabaseAdmin.from('coaching_items').insert(coachingItems);
+    }
 
     // ─── STEP 3: Mark completed + auto-fill prospect name ─────────
     // Check if prospect_name is missing, and if Claude extracted one

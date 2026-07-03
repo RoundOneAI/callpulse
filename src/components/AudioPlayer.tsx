@@ -12,15 +12,22 @@ function formatTime(seconds: number): string {
 interface AudioPlayerProps {
   src: string;
   compact?: boolean;
+  duration?: number;
 }
 
-export default function AudioPlayer({ src, compact = false }: AudioPlayerProps) {
+export default function AudioPlayer({ src, compact = false, duration: initialDuration }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [duration, setDuration] = useState(initialDuration || 0);
   const [muted, setMuted] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (typeof initialDuration === 'number') {
+      setDuration(initialDuration);
+    }
+  }, [initialDuration]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -33,17 +40,23 @@ export default function AudioPlayer({ src, compact = false }: AudioPlayerProps) 
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const onEnded = () => setPlaying(false);
     const onCanPlay = () => setLoading(false);
+    const onWaiting = () => setLoading(true);
+    const onPlaying = () => setLoading(false);
 
     audio.addEventListener('loadedmetadata', onLoadedMetadata);
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('canplay', onCanPlay);
+    audio.addEventListener('waiting', onWaiting);
+    audio.addEventListener('playing', onPlaying);
 
     return () => {
       audio.removeEventListener('loadedmetadata', onLoadedMetadata);
       audio.removeEventListener('timeupdate', onTimeUpdate);
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('canplay', onCanPlay);
+      audio.removeEventListener('waiting', onWaiting);
+      audio.removeEventListener('playing', onPlaying);
     };
   }, [src]);
 
@@ -97,7 +110,7 @@ export default function AudioPlayer({ src, compact = false }: AudioPlayerProps) 
           />
         </div>
         <span className="text-xs text-gray-400 tabular-nums shrink-0">
-          {formatTime(currentTime)}
+          {formatTime(currentTime)} / {formatTime(duration)}
         </span>
       </div>
     );

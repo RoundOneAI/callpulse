@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Phone, Search, Trash2, Loader2 } from 'lucide-react';
 import { useAuthStore } from '../store/auth';
 import { getCalls, getAudioUrl, deleteCalls } from '../services/calls';
+import { processCallAsync } from '../services/analysis';
 import { supabase } from '../services/supabase';
 import { cn } from '../utils/cn';
 import { getScoreBadge } from '../utils/scores';
@@ -27,25 +28,53 @@ export default function Calls() {
     Promise.all([
       getCalls(company.id),
       supabase.from('profiles').select('*').eq('company_id', company.id).eq('role', 'sdr'),
-    ]).then(async ([callsData, { data: sdrsData }]) => {
+    ]).then(([callsData, { data: sdrsData }]) => {
       setCalls(callsData);
       setSdrs(sdrsData || []);
       setLoading(false);
-
-      // Fetch signed URLs for calls with audio files
-      const withAudio = callsData.filter(c => c.file_path);
-      if (withAudio.length > 0) {
-        const urls: Record<string, string> = {};
-        await Promise.all(
-          withAudio.map(async (c) => {
-            const url = await getAudioUrl(c.file_path!);
-            if (url) urls[c.id] = url;
-          })
-        );
-        setAudioUrls(urls);
-      }
     });
   }, [company]);
+
+  const audioUrlsRef = useRef(audioUrls);
+  useEffect(() => {
+    audioUrlsRef.current = audioUrls;
+  }, [audioUrls]);
+
+  // Fetch signed URLs for calls with audio files
+  useEffect(() => {
+    const withAudio = calls.filter(c => c.file_path && !audioUrlsRef.current[c.id]);
+    if (withAudio.length === 0) return;
+
+    Promise.all(
+      withAudio.map(async (c) => {
+        const url = await getAudioUrl(c.file_path!);
+        return { id: c.id, url };
+      })
+    ).then((results) => {
+      const newUrls: Record<string, string> = {};
+      results.forEach(({ id, url }) => {
+        if (url) newUrls[id] = url;
+      });
+      if (Object.keys(newUrls).length > 0) {
+        setAudioUrls(prev => ({ ...prev, ...newUrls }));
+      }
+    });
+  }, [calls]);
+
+  // Poll calls if any are transcribing or analyzing
+  useEffect(() => {
+    if (!company) return;
+    const hasProcessing = calls.some(c => c.status === 'transcribing' || c.status === 'analyzing');
+    if (!hasProcessing) return;
+
+    const interval = setInterval(() => {
+      getCalls(company.id).then((callsData) => {
+        setCalls(callsData);
+      });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [calls, company]);
 
   const filtered = calls.filter(c => {
     if (filterSdr && c.sdr_id !== filterSdr) return false;
@@ -98,6 +127,78 @@ export default function Calls() {
     }
   }
 
+  const [retriggering, setRetriggering] = useState(false);
+
+  const failedCalls = filtered.filter(c => c.status === 'failed');
+  const hasFailedCalls = failedCalls.length > 0;
+  const allFailedSelected = hasFailedCalls && failedCalls.every(c => selected.has(c.id));
+  const selectedFailedCount = filtered.filter(c => selected.has(c.id) && c.status === 'failed').length;
+
+  function selectFailedCalls() {
+    setSelected(prev => {
+      const next = new Set(prev);
+      filtered.forEach(c => {
+        if (c.status === 'failed') {
+          next.add(c.id);
+        }
+      });
+      return next;
+    });
+  }
+
+  async function handleRetrigger() {
+    const selectedFailed = filtered.filter(c => selected.has(c.id) && c.status === 'failed');
+    if (selectedFailed.length === 0) return;
+
+    setRetriggering(true);
+    try {
+      await Promise.all(
+        selectedFailed.map(async (call) => {
+          const nextStatus = call.file_path ? 'transcribing' : 'analyzing';
+          const { error } = await supabase
+            .from('calls')
+            .update({ status: nextStatus })
+            .eq('id', call.id);
+
+          if (error) throw error;
+
+          processCallAsync({
+            callId: call.id,
+            sdrId: call.sdr_id,
+            companyId: call.company_id,
+            filePath: call.file_path || undefined,
+            transcript: call.transcript || undefined,
+          });
+        })
+      );
+
+      // Update local state
+      setCalls(prev =>
+        prev.map(c => {
+          if (selected.has(c.id) && c.status === 'failed') {
+            return {
+              ...c,
+              status: c.file_path ? 'transcribing' : 'analyzing',
+            };
+          }
+          return c;
+        })
+      );
+
+      // Clear selection for these calls
+      setSelected(prev => {
+        const next = new Set(prev);
+        selectedFailed.forEach(c => next.delete(c.id));
+        return next;
+      });
+    } catch (err: any) {
+      console.error('Retrigger failed:', err);
+      alert('Failed to retrigger processing: ' + (err.message || 'Unknown error'));
+    } finally {
+      setRetriggering(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -110,15 +211,51 @@ export default function Calls() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">All Calls</h1>
-        {selected.size > 0 && (
-          <button
-            onClick={() => setShowDeleteConfirm(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors"
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete ({selected.size})
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {hasFailedCalls && !allFailedSelected && (
+            <button
+              onClick={selectFailedCalls}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
+            >
+              Select All Failed
+            </button>
+          )}
+          {selectedFailedCount > 0 && (
+            <button
+              onClick={handleRetrigger}
+              disabled={retriggering}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              {retriggering ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Retriggering...
+                </>
+              ) : (
+                <>
+                  Retrigger Processing ({selectedFailedCount})
+                </>
+              )}
+            </button>
+          )}
+          {selected.size > 0 && (
+            <button
+              onClick={() => setSelected(new Set())}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
+            >
+              Clear Selection
+            </button>
+          )}
+          {selected.size > 0 && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 transition-colors cursor-pointer"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete ({selected.size})
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -203,9 +340,13 @@ export default function Calls() {
                   </td>
                   <td className="py-3 px-4 text-gray-600">{call.prospect_name || '—'}</td>
                   <td className="py-3 px-4 text-gray-600">{call.call_date}</td>
-                  <td className="py-3 px-4 min-w-[180px]">
+                  <td className="py-3 px-4 min-w-[200px]">
                     {audioUrls[call.id] ? (
-                      <AudioPlayer src={audioUrls[call.id]} compact />
+                      <AudioPlayer
+                        src={audioUrls[call.id]}
+                        compact
+                        duration={call.duration_seconds || undefined}
+                      />
                     ) : (
                       <span className="text-xs text-gray-300">--</span>
                     )}

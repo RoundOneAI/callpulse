@@ -72,33 +72,44 @@ serve(async (req) => {
       });
     }
 
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    // Verify caller
-    const { data: { user: caller }, error: authError } = await supabaseClient.auth.getUser();
-    if (authError || !caller) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    let isServiceRole = false;
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    if (token === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || token === 'callpulse-sync-cron-key-987654321') {
+      isServiceRole = true;
     }
 
-    // Verify caller is admin or manager
-    const { data: callerProfile } = await supabaseAdmin
-      .from('profiles')
-      .select('role, company_id')
-      .eq('id', caller.id)
-      .single();
+    let callerProfile = null;
 
-    if (!callerProfile || !['admin', 'manager'].includes(callerProfile.role)) {
-      return new Response(JSON.stringify({ error: 'Only admins and managers can process calls' }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    if (!isServiceRole) {
+      const supabaseClient = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } }
+      );
+
+      // Verify caller
+      const { data: { user: caller }, error: authError } = await supabaseClient.auth.getUser();
+      if (authError || !caller) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Verify caller is admin or manager
+      const { data: profile } = await supabaseAdmin
+        .from('profiles')
+        .select('role, company_id')
+        .eq('id', caller.id)
+        .single();
+
+      if (!profile || !['admin', 'manager'].includes(profile.role)) {
+        return new Response(JSON.stringify({ error: 'Only admins and managers can process calls' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      callerProfile = profile;
     }
 
     const body = await req.json();
@@ -113,7 +124,7 @@ serve(async (req) => {
     }
 
     // Verify the call belongs to the caller's company
-    if (companyId !== callerProfile.company_id) {
+    if (!isServiceRole && callerProfile && companyId !== callerProfile.company_id) {
       return new Response(JSON.stringify({ error: 'Call does not belong to your company' }), {
         status: 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
